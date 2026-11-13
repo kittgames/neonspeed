@@ -1994,6 +1994,8 @@ let state = 'boot', prevState = 'menu', settingsReturn = 'menu';
 let cycle = 0.16, simTime = 0, countdown = 0, crashT = 0, shake = 0;
 const bend = { x: 0, y: 0, tx: 0, ty: 0, dist: 300 };
 const input = { left: false, right: false, brake: false, nitro: false };
+/* Arrastrar el dedo: el coche sigue al dedo (relativo a donde tocaste) */
+const drag = { on: false, id: null, x0: 0, x: 0, car0: 0 };
 const player = {};
 let run = {};
 let P = perf();
@@ -2358,7 +2360,13 @@ function gearInfo(sf) {
 }
 function updatePlayer(dt) {
   const diff = difficulty();
-  const steerIn = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  let steerIn = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  if (drag.on && !input.left && !input.right) {
+    const k = (2 * X_LIMIT) / Math.max(240, innerWidth * 0.62);
+    const tx = clamp(drag.car0 + (drag.x - drag.x0) * k, -X_LIMIT, X_LIMIT);
+    steerIn = clamp((tx - player.x) * 0.6, -1, 1);
+    if (Math.abs(tx - player.x) < 0.08) steerIn = 0;
+  }
   player.brake = input.brake;
   if (player.brake && !player._br && player.speed > 30) AudioSys.sfx('screech');
   player._br = player.brake;
@@ -2643,7 +2651,7 @@ function refreshMenu() {
   const c = claimableCount(); const b = $('m-badge'); b.style.display = c ? 'inline-block' : 'none'; b.textContent = c;
   const lv = playerLevel();
   ['p', 'h'].forEach(k => { $(k + '-level').textContent = 'LVL ' + lv.level; $(k + '-xp').style.width = lv.pct + '%'; });
-  if (IS_TOUCH) $('m-hint').innerHTML = 'Hold ◀ ▶ to steer · NITRO to boost · BRAKE to slow down<br>Near misses build combos and refill your nitro.';
+  if (IS_TOUCH) $('m-hint').innerHTML = 'Drag your finger to steer (or hold ◀ ▶) · NITRO to boost · BRAKE to slow down<br>Near misses build combos and refill your nitro.';
 }
 function goMenu() {
   state = 'menu'; Music.intensity = 0;
@@ -2845,6 +2853,15 @@ document.querySelectorAll('.tbtn').forEach(b => {
   b.addEventListener('contextmenu', e => e.preventDefault());
 });
 addEventListener('pointerdown', () => AudioSys.init(), { once: false, passive: true });
+addEventListener('pointerdown', e => {
+  if (state !== 'playing' && state !== 'countdown') return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (e.target.closest && e.target.closest('button,.tbtn,a,input,.panel,.menu,#pause-btn')) return;
+  drag.on = true; drag.id = e.pointerId; drag.x0 = drag.x = e.clientX; drag.car0 = player.x;
+}, { passive: true });
+addEventListener('pointermove', e => { if (drag.on && e.pointerId === drag.id) drag.x = e.clientX; }, { passive: true });
+['pointerup', 'pointercancel'].forEach(ev => addEventListener(ev, e => { if (e.pointerId === drag.id) { drag.on = false; drag.id = null; } }, { passive: true }));
+addEventListener('blur', () => { drag.on = false; });
 function onResize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight); Post.setSize(); viewOffset = '__';
