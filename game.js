@@ -53,6 +53,62 @@ const UPGRADES = [
   { key: 'magnet',   name: 'Power-ups', desc: 'Magnet and ×2 last longer' },
 ];
 const UPG_COST = [250, 500, 900, 1500, 2500];
+/* =====================================================================
+   v12: CAR CHARACTER — every car and upgrade has a strength and a cost
+   ===================================================================== */
+const TRAITS = {
+  red:     { accel: 1,    wet: 1,    mass: 1,    width: 1,    boost: 0,     drain: 1,    pros: ['Balanced all-rounder'],                cons: ['No special strength'] },
+  blue:    { accel: 1.18, wet: 0.95, mass: 0.8,  width: 0.97, boost: 0,     drain: 1,    pros: ['Light: fastest off the line'],         cons: ['Walls and cones slow it more'] },
+  green:   { accel: 1.05, wet: 1.18, mass: 0.9,  width: 0.95, boost: 0,     drain: 1,    pros: ['Grips in the rain', 'Agile'],          cons: ['Modest top speed'] },
+  gold:    { accel: 0.86, wet: 0.85, mass: 1.35, width: 1.08, boost: 0.03,  drain: 1,    pros: ['Heavy: shrugs off walls and cones', 'Big nitro push'], cons: ['Wide body', 'Slow to accelerate', 'Slides in the rain'] },
+  stealth: { accel: 1,    wet: 0.88, mass: 0.95, width: 0.9,  boost: 0,     drain: 1,    pros: ['Narrow: slips through tight gaps', 'Sharp steering'], cons: ['Nervous in the rain'] },
+  purple:  { accel: 1.02, wet: 0.95, mass: 1,    width: 1,    boost: 0.06,  drain: 1.2,  pros: ['Biggest nitro kick in the game'],      cons: ['Nitro burns 20% faster'] },
+  cyan:    { accel: 0.93, wet: 1.15, mass: 1,    width: 0.98, boost: 0,     drain: 1,    pros: ['Best grip', 'Great in the rain'],      cons: ['Softer acceleration'] },
+  white:   { accel: 1.05, wet: 0.72, mass: 1.1,  width: 1.04, boost: 0.02,  drain: 1,    pros: ['Fastest car'],                         cons: ['Slick tyres: dangerous in the rain', 'Wide body'] },
+};
+const traitOf = id => TRAITS[id] || TRAITS.red;
+const UPG_TRADE = {
+  engine:   { plus: '+3.5% top speed, +5% acceleration', minus: '−2% steering, −3% rain grip' },
+  handling: { plus: '+7% steering and grip',              minus: '−1% top speed (downforce)' },
+  nitro:    { plus: '+2% boost, burns 6% slower',          minus: '−8% natural refill' },
+  magnet:   { plus: '+15% power-up time',                  minus: 'Power-ups appear 5% less often' },
+};
+const TIRES = {
+  sport: { name: 'SPORT', price: 0,   pros: 'All-round grip',          cons: '—' },
+  slick: { name: 'SLICK', price: 500, pros: '+7% grip in the dry',     cons: '−35% grip in the rain' },
+  rain:  { name: 'RAIN',  price: 500, pros: '+30% grip in the rain',   cons: '−3% top speed' },
+};
+const GEARS = {
+  std:   { name: 'STANDARD', price: 0,   pros: 'Balanced',             cons: '—' },
+  short: { name: 'SHORT',    price: 300, pros: '+15% acceleration',    cons: '−5% top speed' },
+  long:  { name: 'LONG',     price: 300, pros: '+5% top speed',        cons: '−15% acceleration' },
+};
+const TUNE_DEFAULT = () => ({ glow: 'off', rims: 'stock', stripe: 'none', stripeCol: 'white', flame: 'blue', tires: 'sport', gears: 'std' });
+const NEON_COLS = { cyan: [0, 0.94, 1], pink: [1, 0.17, 0.84], purple: [0.6, 0.36, 1], green: [0.2, 1, 0.45], gold: [1, 0.78, 0.2], red: [1, 0.15, 0.2], white: [1, 1, 1] };
+const RIM_COLS = { stock: null, black: 0x111216, gold: 0xd4a017, chrome: 0xe8ecf2, cyan: 0x00e5ff, pink: 0xff2bd6 };
+const STRIPE_COLS = { white: 0xf4f6fa, black: 0x0c0d10, cyan: 0x00e5ff, pink: 0xff2bd6, gold: 0xffc21a };
+const FLAME_COLS = { blue: [0.3, 0.75, 1], orange: [1, 0.55, 0.15], pink: [1, 0.25, 0.85], green: [0.35, 1, 0.45], purple: [0.65, 0.4, 1] };
+const PART_PRICE = { glow: 350, rims: 150, stripe: 250, flame: 200, slick: 500, rain: 500, gears: 300 };
+function sanitizeTune(t) {
+  const d = TUNE_DEFAULT(); if (!t || typeof t !== 'object') return d;
+  if (t.glow === 'off' || NEON_COLS[t.glow]) d.glow = t.glow;
+  if (t.rims in RIM_COLS) d.rims = t.rims;
+  if (['none', 'twin', 'center'].includes(t.stripe)) d.stripe = t.stripe;
+  if (STRIPE_COLS[t.stripeCol]) d.stripeCol = t.stripeCol;
+  if (FLAME_COLS[t.flame]) d.flame = t.flame;
+  if (TIRES[t.tires]) d.tires = t.tires;
+  if (GEARS[t.gears]) d.gears = t.gears;
+  return d;
+}
+function tuneOf(carId) {
+  save.tuning = save.tuning || {};
+  return sanitizeTune(save.tuning[carId]);
+}
+function ownsPart(carId, part) { return !!(save.parts && save.parts[carId] && save.parts[carId].includes(part)); }
+
+// Active world (set by applyWorldNow)
+const WORLD = { id: 'neon', city: false, storm: 0.55, blades: false };
+
 const MISSION_TPL = [
   { id: 'dist',  mode: 'run', key: 'runDist',     goals: [2, 3, 5],          unit: ' km', dec: 1, text: 'Drive {n} km in one run' },
   { id: 'near',  mode: 'run', key: 'runNear',     goals: [5, 10, 18],        text: 'Get {n} near misses in one run' },
@@ -134,14 +190,19 @@ const missionText = m => tplOf(m).text.replace('{n}', fmt(missionGoal(m)));
 const claimableCount = () => { ensureMissions(); return save.missions.list.filter(m => !m.claimed && m.progress >= missionGoal(m)).length; };
 
 function perf(setup = null) {
-  const c = carById(setup ? setup.car : save.selected).st, u = setup ? setup.upgrades : save.upgrades;
+  const id = setup ? setup.car : save.selected, c = carById(id).st, u = setup ? setup.upgrades : save.upgrades;
+  const T = traitOf(id), tn = setup ? sanitizeTune(setup.tune) : tuneOf(id), ty = tn.tires, gr = tn.gears;
   return {
-    maxSpeed: 52 * (1 + 0.035 * (c.speed + u.engine)),
-    accel: 15 * (1 + 0.05 * (c.speed + u.engine)),
-    handling: 1 + 0.07 * (c.handling + u.handling),
-    nitroDrain: 24 * (1 - 0.06 * (c.nitro + u.nitro)),
-    nitroBoost: 1.42 + 0.02 * (c.nitro + u.nitro),
-    puTime: 1 + 0.15 * u.magnet,
+    maxSpeed: 52 * (1 + 0.035 * (c.speed + u.engine)) * (1 - 0.01 * u.handling) * (ty === 'rain' ? 0.97 : 1) * (gr === 'short' ? 0.95 : gr === 'long' ? 1.05 : 1),
+    accel: 15 * (1 + 0.05 * (c.speed + u.engine)) * T.accel * (gr === 'short' ? 1.15 : gr === 'long' ? 0.85 : 1),
+    handling: (1 + 0.07 * (c.handling + u.handling)) * (1 - 0.02 * u.engine) * (ty === 'slick' ? 1.07 : 1),
+    wet: T.wet * (1 - 0.03 * u.engine) * (ty === 'slick' ? 0.65 : ty === 'rain' ? 1.3 : 1),
+    mass: T.mass, width: T.width,
+    nitroDrain: 24 * (1 - 0.06 * (c.nitro + u.nitro)) * T.drain,
+    nitroBoost: 1.42 + 0.02 * (c.nitro + u.nitro) + T.boost,
+    regen: 3.5 * (1 - 0.08 * u.nitro),
+    puTime: 1 + 0.15 * u.magnet, puGap: 1 + 0.05 * u.magnet,
+    flame: FLAME_COLS[tn.flame] || FLAME_COLS.blue,
   };
 }
 function playerLevel() {
@@ -479,7 +540,7 @@ const Music = {
     if (this.tracks || !AudioSys.ready) return;
     const ctx = AudioSys.ctx;
     this.tracks = ['menu', 'race', 'storm'].map(n => {
-      const el = new Audio(); el.src = AUD['music_' + n]; el.loop = true; el.preload = 'auto';
+      const el = new Audio(); el.src = n === 'race' && this.raceSrc ? this.raceSrc : AUD['music_' + n]; el.loop = true; el.preload = 'auto';
       const g = ctx.createGain(); g.gain.value = 0;
       let src = null;
       try { src = ctx.createMediaElementSource(el); src.connect(g); g.connect(AudioSys.musicBus); } catch (e) { src = null; }
@@ -939,6 +1000,7 @@ const FAC = TEX.facades.map((f, k) => {
   const mat = track(new THREE.MeshStandardMaterial({ color: 0xffffff, map: m, emissive: 0xffffff, emissiveMap: e, emissiveIntensity: 0,
     roughness: glassy ? 0.3 : 0.85, metalness: glassy ? 0.45 : 0.05 }));
   const tile = { value: new THREE.Vector2(FAC_TILE[k][0], FAC_TILE[k][1]) };
+  mat.userData.tile = tile;
   mat.onBeforeCompile = shader => { shader.__tile = tile; facadeShader(shader); };
   mat.customProgramCacheKey = () => 'facade';
   if (glassy) envMat(mat);
@@ -951,9 +1013,11 @@ const roofMat = basic({ color: 0xffffff });
 const roofMesh = inst(new THREE.BoxGeometry(1, 1, 1), roofMat, 44);
 const NEONS = [[0, 0.94, 1], [1, 0.17, 0.84], [0.6, 0.36, 1], [1, 0.82, 0.25]];
 function newBuilding(b) {
-  if (b.tall) { b.x = b.s * rand(58, 115); b.w = rand(12, 22); b.d = rand(12, 22); b.h = rand(40, 85); }
-  else { b.x = b.s * rand(40, 60); b.w = rand(10, 18); b.d = rand(10, 18); b.h = rand(12, 30); }
-  b.neon = b.tall ? Math.random() < 0.6 : Math.random() < 0.25;
+  const city = WORLD.city;
+  if (b.tall) { b.x = b.s * (city ? rand(40, 85) : rand(58, 115)); b.w = rand(12, 22); b.d = rand(12, 22); b.h = city ? rand(60, 135) : rand(40, 85); }
+  else { b.x = b.s * (city ? rand(25, 34) : rand(40, 60)); b.w = rand(10, 18); b.d = rand(10, 18); b.h = city ? rand(18, 44) : rand(12, 30); }
+  b.neon = b.tall ? Math.random() < (city ? 0.85 : 0.6) : Math.random() < (city ? 0.55 : 0.25);
+  b.blade = city && !b.tall && Math.random() < 0.85;
   b.nc = pick(NEONS);
   return b;
 }
@@ -1005,13 +1069,13 @@ function scrollWorld(d, t) {
   [poleMesh, armMesh, bulbMesh, poolMesh].forEach(m => { m.instanceMatrix.needsUpdate = true; });
   TREES.forEach((tr, i) => {
     const z = tr.z + d; tr.z = wrap(z); if (z > WRAP_Z) newTree(tr);
-    const sc = ZONE_HIDE(tr.z, 'tree', 3) ? HIDE : tr.sc;
+    const sc = WORLD.city || ZONE_HIDE(tr.z, 'tree', 3) ? HIDE : tr.sc;
     setInst(TREE_MESH[tr.k], tr.j, tr.x, 0, tr.z, sc, sc, sc, tr.ry);
   });
   TREE_MESH.forEach(m => { m.instanceMatrix.needsUpdate = true; });
   BUSHES.forEach(b => {
     const z = b.z + d; b.z = wrap(z); if (z > WRAP_Z) newBush(b);
-    const sc = ZONE_HIDE(b.z, 'tree', 3) ? HIDE : b.sc;
+    const sc = WORLD.city || ZONE_HIDE(b.z, 'tree', 3) ? HIDE : b.sc;
     setInst(BUSH_MESH[b.k], b.j, b.x, 0, b.z, sc, sc, sc, b.ry);
   });
   BUSH_MESH.forEach(m => { m.instanceMatrix.needsUpdate = true; });
@@ -1021,7 +1085,10 @@ function scrollWorld(d, t) {
     setInst(b.mesh, b.mi, b.x, bh ? -200 : 0, b.z, b.w, b.h, b.d);
     if (b.neon && !bh) setInst(roofMesh, i, b.x, b.h + 0.3, b.z, b.w + 0.4, 0.6, b.d + 0.4);
     else setInst(roofMesh, i, 0, -50, 0, 0.001, 0.001, 0.001);
+    if (WORLD.blades && b.blade && !bh) setInst(bladeMesh, i, b.x - b.s * (b.w / 2 + 0.55), b.h * 0.16, b.z + b.d * 0.2, 0.9, Math.min(b.h * 0.62, 15), 2.1);
+    else setInst(bladeMesh, i, 0, -50, 0, 0.001, 0.001, 0.001);
   });
+  bladeMesh.instanceMatrix.needsUpdate = true;
   BMESH.forEach(m => { m.instanceMatrix.needsUpdate = true; }); roofMesh.instanceMatrix.needsUpdate = true;
   SIGN_OBJS.forEach(o => { o.g.position.z = wrap(o.g.position.z + d); o.g.visible = !(o.hidden = ZONE_HIDE(o.g.position.z, 'sign', 5)); });
   let ci = 0;
@@ -1031,7 +1098,7 @@ function scrollWorld(d, t) {
     c.parts.forEach(q => setInst(cloudMesh, ci++, c.position.x + q[0], c.position.y + q[1], c.position.z + q[2], q[3], q[3], q[3]));
   });
   cloudMesh.instanceMatrix.needsUpdate = true;
-  roadTex.offset.y += d / TILE; grassTex.offset.y += d / 8;
+  roadTex.offset.y += d / TILE; grassTex.offset.y += d / 8; cityGroundTex.offset.y = grassTex.offset.y;
   if (roadTex.offset.y > 1000) roadTex.offset.y -= 1000;
   if (grassTex.offset.y > 1000) grassTex.offset.y -= 1000;
 }
@@ -1787,7 +1854,7 @@ function updateZones(dt, ws) {
 function hitCone(c, z, Z) {
   c.alive = false;
   flyingCones.push({ x: c.x, y: 0.2, z, vx: (c.x - player.x || 0.5) * 6 + rand(-2, 2), vy: rand(5, 8), vz: rand(-10, -4), r: 0, vr: rand(8, 14), t: 0 });
-  player.speed *= 0.93; shake = Math.max(shake, 0.35);
+  player.speed *= 1 - 0.07 / P.mass; shake = Math.max(shake, 0.35);
   if (run.combo > 0) { run.combo = 0; }
   AudioSys.sfx('cone'); buzz(18);
   burst(c.x, 0.5, z, 10, { color: [1, 0.45, 0.1], speed: 6, up: 5, life: 0.5, size: 0.45, spread: 0.3, grav: 14 });
@@ -1841,7 +1908,7 @@ function worksAhead(lane, z) {
 /* ---------- Player car ---------- */
 let playerModel = null;
 const playerModels = new Map();
-function setPlayerModel(id) {
+function setPlayerModel(id, tune) {
   const c = carById(id);
   if (playerModel) scene.remove(playerModel.root);
   if (!playerModels.has(c.id)) playerModels.set(c.id, buildCar({ color: c.color, accent: c.accent, player: true }));
@@ -1850,6 +1917,7 @@ function setPlayerModel(id) {
   playerModel.body.rotation.set(0, 0, 0);
   playerModel.wheels.forEach(w => { w.spin.rotation.set(0, 0, 0); w.steer.rotation.set(0, 0, 0); });
   scene.add(playerModel.root);
+  applyTuning(c.id, tune || tuneOf(c.id));
 }
 const shieldMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.ShaderMaterial({
   uniforms: { t: { value: 0 }, a: { value: 0 } },
@@ -1870,7 +1938,8 @@ ghostModel.root.visible = false; scene.add(ghostModel.root);
 /* =====================================================================
    GAME STATE
    ===================================================================== */
-const LANES = [-6, -2, 2, 6], X_LIMIT = 7.25, P_HW = 0.95, P_HL = 2.15, SPAWN_Z = -300;
+const LANES = [-6, -2, 2, 6], X_LIMIT = 7.25, P_HL = 2.15, SPAWN_Z = -300;
+let P_HW = 0.95;
 let state = 'boot', prevState = 'menu', settingsReturn = 'menu';
 let cycle = 0.16, simTime = 0, countdown = 0, crashT = 0, shake = 0;
 const bend = { x: 0, y: 0, tx: 0, ty: 0, dist: 300 };
@@ -2309,7 +2378,7 @@ function updatePlayer(dt) {
   } else {
     if (player.nitroOn) AudioSys.sfx('blowoff');
     player.nitroOn = false;
-    player.nitro = Math.min(100, player.nitro + 3.5 * dt);
+    player.nitro = Math.min(100, player.nitro + P.regen * dt);
   }
   // Speed
   const top = P.maxSpeed * (1 + 0.16 * diff) * (player.nitroOn ? P.nitroBoost : 1);
@@ -2319,7 +2388,7 @@ function updatePlayer(dt) {
     player.speed = Math.min(top, player.speed + a * dt);
   } else player.speed = damp(player.speed, top, 1.4, dt);
   // Steering with inertia + centrifugal push from curves
-  const grip = P.handling * (1 - 0.12 * Weather.wet);
+  const grip = P.handling * (1 - Weather.wet * 0.12 * Math.pow(2 - clamp(P.wet, 0.5, 1.5), 2));
   player.steer = damp(player.steer, steerIn, 9 * grip, dt);
   const sf = player.speed / P.maxSpeed;
   const latMax = 13.5 * P.handling * (0.5 + 0.5 * Math.min(sf, 1));
@@ -2332,7 +2401,7 @@ function updatePlayer(dt) {
   if (player.x > X_LIMIT) { player.x = X_LIMIT; if (player.vx > 0) player.vx *= -0.3; player.wall = true; }
   if (player.x < -X_LIMIT) { player.x = -X_LIMIT; if (player.vx < 0) player.vx *= -0.3; player.wall = true; }
   if (player.wall) {
-    player.speed = Math.max(15, player.speed - 16 * dt);
+    player.speed = Math.max(15, player.speed - 16 / P.mass * dt);
     shake = Math.max(shake, 0.12);
     if (fxChance(0.7, dt)) burst(player.x + Math.sign(player.x) * 1.0, 0.5, rand(-1.5, 1.5), 2, { color: [1, 0.8, 0.3], speed: 6, up: 4, life: 0.35, size: 0.35, spread: 0.2, grav: 12 });
   }
@@ -2352,7 +2421,7 @@ function updatePlayer(dt) {
   if (ghostRec.length / 2 < run.time * 10 && ghostRec.length < 12000) ghostRec.push(Math.round(player.x * 10), Math.round(run.dist));
   // Exhaust FX
   if (player.nitroOn) {
-    if (Math.random() < dt * 60) for (const s of [-0.45, 0.45]) emit({ x: player.x + s, y: 0.42, z: 2.35, vx: rand(-0.5, 0.5), vy: rand(0, 0.6), vz: rand(8, 14), life: 0.22, max: 0.22, size: rand(0.7, 1.1), grow: -1.5, r: 0.3, g: 0.75, b: 1, add: true, grav: 0, drag: 1, world: false });
+    if (Math.random() < dt * 60) for (const s of [-0.45, 0.45]) emit({ x: player.x + s, y: 0.42, z: 2.35, vx: rand(-0.5, 0.5), vy: rand(0, 0.6), vz: rand(8, 14), life: 0.22, max: 0.22, size: rand(0.7, 1.1), grow: -1.5, r: P.flame[0], g: P.flame[1], b: P.flame[2], add: true, grav: 0, drag: 1, world: false });
   } else if (fxChance(0.25, dt)) {
     emit({ x: player.x + pick([-0.45, 0.45]), y: 0.35, z: 2.4, vx: rand(-0.3, 0.3), vy: rand(0.2, 0.6), vz: rand(1, 2), life: 0.8, max: 0.8, size: 0.5, grow: 1.2, r: 0.75, g: 0.75, b: 0.78, add: false, grav: 0, drag: 1, world: true });
   }
@@ -2362,7 +2431,7 @@ function updatePlayer(dt) {
   // Spawning
   if (run.dist >= run.nextSpawn) { spawnPattern(); run.nextSpawn = run.dist + lerp(80, 34, diff) * rand(0.8, 1.25); }
   if (run.dist >= run.nextCoin) { spawnCoins(); run.nextCoin = run.dist + rand(150, 260); }
-  if (run.dist >= run.nextPU) { spawnPowerup(); run.nextPU = run.dist + rand(700, 1100); }
+  if (run.dist >= run.nextPU) { spawnPowerup(); run.nextPU = run.dist + rand(700, 1100) * P.puGap; }
   // Live mission completion check
   missionTick -= dt;
   if (missionTick <= 0) { missionTick = 0.5; checkMissionsLive(); checkBadgesLive(); }
@@ -2449,7 +2518,7 @@ function updateGlows(t) {
   }
   coins.forEach(c => { if (c.z > -220) glow.add(c.x, c.y, c.z, 2.4, 1, 0.75, 0.2, 0.18 + 0.5 * n); });
   powerups.forEach(p => { const c = PU_TYPES[p.type].rgb; glow.add(p.x, p.mesh.position.y, p.z, 5, c[0], c[1], c[2], 0.9); });
-  policeFx(t);
+  policeFx(t); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
   if (ghostModel.root.visible) glow.add(ghostModel.root.position.x, 0.8, ghostModel.root.position.z, 4, 0, 0.9, 1, 0.35);
 }
 function updateGhost() {
@@ -2582,6 +2651,8 @@ function show(id) {
   $('profile').style.display = id === 'menu' ? 'flex' : 'none';
 }
 function refreshMenu() {
+  betSync(false);
+  if ($('menu-world')) $('menu-world').textContent = worldById(save.world || 'neon').name;
   refreshAvatars();
   document.querySelectorAll('.pname').forEach(el => { el.textContent = cleanNickname(save.nickname); });
   ensureMissions();
@@ -2604,11 +2675,11 @@ function startRun() {
   AudioSys.init();
   resetRun();
   run.challenge = activeChallenge ? validateChallenge(activeChallenge) : null;
-  run.setup = run.challenge ? {car:run.challenge.car, upgrades:{...run.challenge.upgrades}} : {car:save.selected, upgrades:{...save.upgrades}};
+  run.setup = run.challenge ? {car:run.challenge.car, upgrades:{...run.challenge.upgrades}, tune:sanitizeTune(run.challenge.tune)} : {car:save.selected, upgrades:{...save.upgrades}, tune:tuneOf(save.selected)};
   run.recordBefore = save.highScore;
   coachDismissed = false;
-  P = perf(run.setup); if (run.challenge) ghostPlay = null;
-  setPlayerModel(run.setup.car);
+  P = perf(run.setup); P_HW = 0.95 * P.width; if (run.challenge) ghostPlay = null;
+  setPlayerModel(run.setup.car, run.setup.tune);
   state = 'countdown'; countdown = 3;
   zoneRng = Math.random; extendZones();
   prefillTraffic();
@@ -2670,6 +2741,8 @@ function endRun() {
     ` <span style="color:#aab">(+${fmt(nb.reduce((a, b) => a + b.reward, 0))} coins added)</span>`;
   Music.intensity = 0;
   captureResult();
+  if (activeBet) betFinish();
+  $('go-bet').hidden = !!run.challenge || !lastResult || lastResult.score < 1;
   show('gameover');
 }
 
@@ -2687,21 +2760,23 @@ function renderGarage() {
   $('g-coins').textContent = fmt(save.coins);
   $('tab-cars').classList.toggle('on', garageTab === 'cars');
   $('tab-upg').classList.toggle('on', garageTab === 'upg');
+  $('tab-tune').classList.toggle('on', garageTab === 'tune');
   const L = $('g-list');
   if (garageTab === 'cars') {
     L.innerHTML = CARS.map(c => {
       const owned = save.owned.includes(c.id), sel = save.selected === c.id;
-      const btn = owned ? (sel ? `<button class="btn sm ghost" disabled>EQUIPPED</button>` : `<button class="btn sm primary" data-action="equip" data-id="${c.id}">EQUIP</button>`)
+      const btn = escrowed(c.id) ? '<button class="btn sm ghost" disabled>🔒 ON THE LINE</button>' : owned ? (sel ? `<button class="btn sm ghost" disabled>EQUIPPED</button>` : `<button class="btn sm primary" data-action="equip" data-id="${c.id}">EQUIP</button>`)
         : `<button class="btn sm gold" data-action="buy-car" data-id="${c.id}" ${save.coins < c.price ? 'disabled' : ''}>🪙 ${fmt(c.price)}</button>`;
       const acc = '#' + c.accent.toString(16).padStart(6, '0');
       return `<div class="card ${sel ? 'sel' : ''} ${previewId === c.id && !sel ? 'prev' : ''}" data-action="preview" data-id="${c.id}">
         <div class="swatch" style="background:linear-gradient(135deg,${c.hex} 60%,${acc} 60% 68%,${c.hex} 68%)"></div>
-        <div class="info"><div class="name">${owned ? '' : '🔒 '}${c.name}</div>${statBars(c.st)}</div>${btn}</div>`;
+        <div class="info"><div class="name">${owned ? '' : '🔒 '}${c.name}</div>${statBars(c.st)}${traitChips(c.id)}</div>${btn}</div>`;
     }).join('');
-  } else {
+  } else if (garageTab === 'tune') renderTuning(L);
+  else {
     L.innerHTML = UPGRADES.map(u => {
       const lv = save.upgrades[u.key], max = lv >= 5, cost = UPG_COST[lv];
-      return `<div class="card" style="cursor:default"><div class="info"><div class="name">${u.name}</div><div class="desc">${u.desc}</div>
+      return `<div class="card" style="cursor:default"><div class="info"><div class="name">${u.name}</div><div class="desc">${u.desc}</div><div class="traits"><span class="pro">▲ ${UPG_TRADE[u.key].plus}</span><span class="con">▼ ${UPG_TRADE[u.key].minus}</span></div>
         <div class="pips">${[0, 1, 2, 3, 4].map(i => `<i class="${i < lv ? 'on' : ''}"></i>`).join('')}</div></div>
         ${max ? '<button class="btn sm ghost" disabled>MAX</button>' : `<button class="btn sm gold" data-action="upgrade" data-key="${u.key}" ${save.coins < cost ? 'disabled' : ''}>🪙 ${fmt(cost)}</button>`}</div>`;
     }).join('');
@@ -2758,7 +2833,7 @@ function validateChallenge(value) {
     if (!Number.isInteger(n) || n < 0 || n > 5) throw new Error('Invalid setup');
     upgrades[k] = n;
   }
-  return {v:1, name:cleanNickname(value.name), score:value.score, dist:value.dist, combo:value.combo, car:value.car, upgrades};
+  return {v:1, name:cleanNickname(value.name), score:value.score, dist:value.dist, combo:value.combo, car:value.car, upgrades, tune:sanitizeTune(value.tune)};
 }
 function encodeChallenge(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(validateChallenge(value)));
@@ -2787,6 +2862,7 @@ function saveNickname() {
   document.querySelectorAll('.pname').forEach(el => { el.textContent = save.nickname; });
 }
 function openFriends() {
+  renderBetList(); betSync(true);
   $('racer-name').value = cleanNickname(save.nickname);
   $('friend-error').textContent = '';
   const history = $('friend-history'); history.replaceChildren();
@@ -2858,7 +2934,7 @@ function updateRunExperience() {
 }
 function captureResult() {
   const setup = run.setup;
-  lastResult = {v:1, name:cleanNickname(save.nickname), score:Math.floor(run.score), dist:Math.round(run.dist), combo:run.bestCombo, car:setup.car, upgrades:{...setup.upgrades}};
+  lastResult = {v:1, name:cleanNickname(save.nickname), score:Math.floor(run.score), dist:Math.round(run.dist), combo:run.bestCombo, car:setup.car, upgrades:{...setup.upgrades}, tune:sanitizeTune(setup.tune)};
   $('go-share').disabled = lastResult.score < 1;
   const target = run.challenge;
   $('go-outcome').textContent = target ? (lastResult.score > target.score ? `You beat ${target.name} by ${fmt(lastResult.score - target.score)} points!` : `${fmt(target.score + 1 - lastResult.score)} more points to beat ${target.name}. Try again!`) : (run.recordBefore > lastResult.score ? `${fmt(run.recordBefore + 1 - lastResult.score)} points from a new personal best` : 'Keep the streak going. Set a score your friends can chase.');
@@ -2935,6 +3011,29 @@ const actions = {
   'toggle-motion'() { save.settings.reducedMotion = !save.settings.reducedMotion; persist(); renderSettings(); },
   'toggle-haptics'() { save.settings.haptics = !save.settings.haptics; persist(); renderSettings(); },
   garage: openGarage,
+  worlds: openWorlds,
+  'tab-tune'() { garageTab = 'tune'; renderGarage(); },
+  tune(el) { setTune(el.dataset.g, el.dataset.v); },
+  'buy-part'(el) { buyPart(el.dataset.part); },
+  'pick-world'(el) {
+    const w = worldById(el.dataset.id);
+    if (w.soon) { toast('COMING SOON', w.name, '#8a8fb0'); return; }
+    if (!worldUnlocked(w)) { AudioSys.sfx('error'); toast('LOCKED', `Reach LVL ${w.unlock.lvl} or unlock with coins`, '#ffd23f'); return; }
+    $('wd-status').textContent = 'Loading ' + w.name + '…';
+    setWorld(w.id).then(() => { $('wd-status').textContent = ''; AudioSys.sfx('buy'); toast(w.name, 'World selected', '#00f0ff'); renderWorlds(); refreshMenu(); })
+      .catch(() => { $('wd-status').textContent = 'Could not load this world. Check your connection.'; });
+  },
+  'buy-world'(el) {
+    const w = worldById(el.dataset.id); if (!w.unlock || save.coins < w.unlock.coins) { AudioSys.sfx('error'); return; }
+    save.coins -= w.unlock.coins; (save.worldsOwned = save.worldsOwned || []).push(w.id); persist(); actions['pick-world'](el);
+  },
+  'bet-create': openBetCreate,
+  'bet-pick'(el) { if (!betDraft) return; betDraft.car = el.dataset.id; document.querySelectorAll('.bet-car').forEach(b => b.classList.toggle('on', b.dataset.id === betDraft.car)); },
+  'bet-go': betGo,
+  'bet-close'() { $('bet-dialog').close(); },
+  'bet-cancel'(el) { betCancel(el.dataset.code); },
+  'bet-code'() { const c = ($('bet-code').value || '').trim().replace(/^.*bet=/, '').toUpperCase(); if (c) { $('friends-dialog').close(); openBetLink(c); } },
+  'bet-copy'() { $('bet-link').select(); try { navigator.clipboard.writeText($('bet-link').value); $('bet-status').textContent = 'Copied! Send it to your friend.'; } catch (e) {} },
   profile: openProfile,
   'profile-back'() { save.nickname = cleanNickname($('pr-name').value); persist(); goMenu(); },
   'pr-tab-badges'() { profileTab = 'badges'; renderProfile(); },
@@ -2951,7 +3050,7 @@ const actions = {
   'tab-cars'() { garageTab = 'cars'; renderGarage(); },
   'tab-upg'() { garageTab = 'upg'; renderGarage(); },
   preview(el) { previewId = el.dataset.id; setPlayerModel(previewId); renderGarage(); },
-  equip(el) { save.selected = el.dataset.id; persist(); previewId = save.selected; setPlayerModel(save.selected); renderGarage(); },
+  equip(el) { if (escrowed(el.dataset.id)) { AudioSys.sfx('error'); return; } save.selected = el.dataset.id; persist(); previewId = save.selected; setPlayerModel(save.selected); renderGarage(); },
   'buy-car'(el) {
     const c = carById(el.dataset.id);
     if (save.coins < c.price) { AudioSys.sfx('error'); return; }
@@ -3094,7 +3193,7 @@ function update(realDt) {
   if (!tunBefore && Zones.tunnel > 0.5 && state === 'playing') run.tunnels++;
   // Weather: some nights bring a storm (the first night of every run always does)
   const isNight = todState.night > 0.6;
-  if (isNight && !wasNight) { stormNight = nightsThisRun === 0 || Math.random() < 0.55; nightsThisRun++; }
+  if (isNight && !wasNight) { stormNight = nightsThisRun === 0 || Math.random() < WORLD.storm; nightsThisRun++; }
   wasNight = isNight;
   const wasRain = Weather.target > 0.5;
   updateWeather(dt, ws, isNight && stormNight ? (['menu', 'garage', 'missions'].includes(state) ? 0.6 : 1) : 0, Zones.tunnel);
@@ -3543,6 +3642,429 @@ function renderProfile() {
   }
 }
 
+/* =====================================================================
+   v12: TUNING VISUALS — underglow, rims, livery stripes, nitro flame colour
+   ===================================================================== */
+const stripeMatCache = new Map();
+function stripePaint(car, tune) {
+  const key = car.id + tune.stripe + tune.stripeCol;
+  if (stripeMatCache.has(key)) return stripeMatCache.get(key);
+  const m = new THREE.MeshPhysicalMaterial({ color: col(car.color), metalness: 0.35, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.7 });
+  envMat(m); track(m);
+  const sc = new THREE.Color(STRIPE_COLS[tune.stripeCol]).convertSRGBToLinear();
+  const S = tune.stripe === 'twin' ? 'step(0.09, ax) * step(ax, 0.27)' : 'step(ax, 0.2)';
+  m.onBeforeCompile = shader => {
+    bendShader(shader);
+    shader.vertexShader = shader.vertexShader.replace('void main() {', 'varying vec3 vLp; varying vec3 vLn;\nvoid main() {')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vLp = position; vLn = normal;');
+    shader.fragmentShader = shader.fragmentShader.replace('void main() {', 'varying vec3 vLp; varying vec3 vLn;\nvoid main() {')
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', `
+  float ax = abs(vLp.x); vec3 nn = normalize(vLn);
+  float face = max(step(0.3, nn.y), step(0.65, abs(nn.z)));
+  float st = face * ${S};
+  vec4 diffuseColor = vec4(mix(diffuse, vec3(${sc.r.toFixed(3)}, ${sc.g.toFixed(3)}, ${sc.b.toFixed(3)}), st), opacity);`);
+  };
+  stripeMatCache.set(key, m);
+  return m;
+}
+const rimMatCache = new Map();
+function rimMat(name) {
+  if (!rimMatCache.has(name)) {
+    const glowy = name === 'cyan' || name === 'pink';
+    const m = std({ vertexColors: true, color: col(RIM_COLS[name]), roughness: name === 'black' ? 0.6 : 0.25, metalness: glowy ? 0.2 : 0.85,
+      emissive: glowy ? col(RIM_COLS[name]) : 0x000000, emissiveIntensity: glowy ? 0.35 : 0 });
+    envMat(m); rimMatCache.set(name, m);
+  }
+  return rimMatCache.get(name);
+}
+// Underglow: a soft coloured pool of light on the road under the car
+const glowPoolMat = track(bent(new THREE.MeshBasicMaterial({ map: radialTex, color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, toneMapped: false })));
+const glowPool = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), glowPoolMat);
+glowPool.scale.set(4.2, 1, 7.2); glowPool.renderOrder = 3; glowPool.visible = false; scene.add(glowPool);
+let curTune = TUNE_DEFAULT(), curCarId = 'red';
+function applyTuning(carId, tune) {
+  curTune = sanitizeTune(tune); curCarId = carId;
+  const car = carById(carId), m = playerModel; if (!m) return;
+  // body paint (stripes) — the first mesh using the car's paint
+  if (!m._paintMesh) m._paintMesh = m.body.children.find(c => c.isMesh && c.material && c.material.isMeshPhysicalMaterial);
+  if (m._paintMesh) {
+    if (!m._paintOrig) m._paintOrig = m._paintMesh.material;
+    m._paintMesh.material = curTune.stripe === 'none' ? m._paintOrig : stripePaint(car, curTune);
+  }
+  m.wheels.forEach(w => {
+    const me = w.spin.children[0]; if (!me) return;
+    if (!me._orig) me._orig = me.material;
+    me.material = curTune.rims === 'stock' ? me._orig : rimMat(curTune.rims);
+  });
+  const nc = NEON_COLS[curTune.glow];
+  glowPool.visible = !!nc;
+  if (nc) glowPoolMat.color.setRGB(nc[0], nc[1], nc[2]);
+  m.root.scale.x = traitOf(carId).width;
+}
+function playerFx(t) {
+  const m = playerModel; if (!m) return;
+  const nc = NEON_COLS[curTune.glow];
+  if (nc && m.root.visible) {
+    const p = m.root.position, night = todState ? todState.night : 0;
+    glowPool.position.set(p.x, 0.035, p.z);
+    glowPool.rotation.y = m.root.rotation.y;
+    glowPoolMat.opacity = (0.35 + 0.65 * night) * (state === 'crashing' || state === 'gameover' ? 0.4 : 1) * (0.9 + 0.1 * Math.sin(t * 6));
+    for (const s of [-1, 1]) for (const z of [-1.2, 0, 1.2])
+      glow.add(p.x + s * 0.98 * m.root.scale.x, 0.22, p.z + z, 1.1 + night, nc[0], nc[1], nc[2], 0.25 + 0.5 * night);
+  } else glowPool.visible = false;
+}
+
+/* =====================================================================
+   v12: WORLDS — Neon City and Tokyo Express (+ upcoming)
+   ===================================================================== */
+const WORLDS = [
+  { id: 'neon',   name: 'NEON CITY',     sub: 'Highway · city lights',              x: 22, y: 58, unlock: null },
+  { id: 'tokyo',  name: 'TOKYO EXPRESS', sub: 'Shuto expressway · neon & rain',     x: 82, y: 40, unlock: { lvl: 3, coins: 1500 } },
+  { id: 'touge',  name: 'MOUNTAIN TOUGE',sub: 'Night mountain pass',                x: 70, y: 22, soon: true },
+  { id: 'miami',  name: 'MIAMI BEACH',   sub: 'Synthwave coast at sunset',          x: 12, y: 30, soon: true },
+  { id: 'desert', name: 'DESERT NIGHT',  sub: 'Endless straight under the stars',   x: 44, y: 76, soon: true },
+];
+const worldById = id => WORLDS.find(w => w.id === id) || WORLDS[0];
+const NEON_PACK = {
+  pano: PANO_TEX.slice(), hv: ASSETS.pano.map(p => p.hv), vs: ASSETS.pano.map(p => p.vspan), haze: PANO_HAZE.map(c => c.clone()),
+  ads: signMats.map(m => m.map), fac: FAC.map(m => ({ map: m.map, emi: m.emissiveMap, tile: m.userData.tile.value.clone() })),
+};
+const worldPacks = { neon: NEON_PACK }, worldLoading = {};
+function worldUnlocked(w) {
+  if (w.soon) return false;
+  if (!w.unlock) return true;
+  return (save.worldsOwned || []).includes(w.id) || playerLevel().level >= w.unlock.lvl;
+}
+function loadWorldPack(id) {
+  if (worldPacks[id]) return Promise.resolve(worldPacks[id]);
+  if (worldLoading[id]) return worldLoading[id];
+  worldLoading[id] = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'worlds/' + id + '.js?v=' + (window.NS_BUILD || '1');
+    s.onload = () => {
+      const raw = window.NS_WORLDS && window.NS_WORLDS[id]; if (!raw) { rej(new Error('pack')); return; }
+      const L = new THREE.TextureLoader();
+      const tex = (uri, rep) => { const t = L.load(uri); t.encoding = THREE.sRGBEncoding; t.anisotropy = 8; if (rep) t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+      const pack = {
+        pano: raw.pano.map(p => { const t = L.load(p.uri); t.wrapS = THREE.MirroredRepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 4; return t; }),
+        hv: raw.pano.map(p => p.hv), vs: raw.pano.map(p => p.vspan),
+        haze: raw.haze.map(c => new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear()),
+        ads: raw.ads.map(u => tex(u)),
+        fac: raw.fac.map(f => ({ map: tex(f.day, true), emi: tex(f.emi, true), tile: new THREE.Vector2(f.tile[0], f.tile[1]) })),
+        music: raw.music,
+      };
+      worldPacks[id] = pack; res(pack);
+    };
+    s.onerror = () => { delete worldLoading[id]; rej(new Error('load')); };
+    document.head.appendChild(s);
+  });
+  return worldLoading[id];
+}
+// Ground for the city: concrete plazas, kerbs and tactile paving instead of grass
+const cityGroundTex = canvasTex(1024, 1024, (x, w, h) => {
+  x.fillStyle = '#2b2e35'; x.fillRect(0, 0, w, h);
+  for (let i = 0; i < 9000; i++) { const v = 30 + Math.random() * 40; x.fillStyle = `rgba(${v},${v + 2},${v + 8},0.35)`; x.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+  x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 3;
+  for (let i = 0; i <= 8; i++) { x.beginPath(); x.moveTo(i * w / 8, 0); x.lineTo(i * w / 8, h); x.stroke(); x.beginPath(); x.moveTo(0, i * h / 8); x.lineTo(w, i * h / 8); x.stroke(); }
+  x.fillStyle = '#b8962a'; x.fillRect(w * 0.44, 0, w * 0.03, h);
+  x.fillStyle = '#3a3e47'; for (let i = 0; i < 4; i++) { x.beginPath(); x.arc(w * (0.2 + i * 0.2), h * (0.3 + (i % 2) * 0.4), 24, 0, 6.3); x.fill(); }
+});
+cityGroundTex.wrapS = cityGroundTex.wrapT = THREE.RepeatWrapping;
+// Vertical neon sign "blades" on the low-rise buildings (Tokyo)
+const bladeTex = canvasTex(128, 1024, (x, w, h) => {
+  x.fillStyle = '#05060a'; x.fillRect(0, 0, w, h);
+  x.strokeStyle = '#fff'; x.lineWidth = 8; x.strokeRect(8, 8, w - 16, h - 16);
+  x.fillStyle = '#fff'; x.font = '900 86px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  ['カ', 'ラ', 'オ', 'ケ', '・', '居', '酒', '屋'].forEach((c, i) => x.fillText(c, w / 2, 80 + i * 118));
+});
+const bladeMat = basic({ map: bladeTex, color: new THREE.Color(1, 1, 1) });
+const bladeMesh = inst(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), bladeMat, BLD.length);
+BLD.forEach((b, i) => bladeMesh.setColorAt(i, new THREE.Color(...pick(Object.values(NEON_COLS)))));
+function applyWorldNow(id, pack) {
+  const w = worldById(id);
+  WORLD.id = w.id; WORLD.city = id === 'tokyo'; WORLD.storm = id === 'tokyo' ? 0.85 : 0.55; WORLD.blades = id === 'tokyo';
+  const U = skyMat.uniforms;
+  ['p0', 'p1', 'p2', 'p3'].forEach((k, i) => { U[k].value = pack.pano[i]; });
+  U.hv.value.set(...pack.hv); U.vs.value.set(...pack.vs);
+  pack.haze.forEach((c, i) => PANO_HAZE[i].copy(c));
+  signMats.forEach((m, i) => { m.map = pack.ads[i % pack.ads.length]; m.needsUpdate = true; });
+  FAC.forEach((m, k) => {
+    const f = WORLD.city ? (k === 0 || k === 1 ? pack.fac[0] : k === 2 ? pack.fac[1] : NEON_PACK.fac[3]) : NEON_PACK.fac[k];
+    m.map = f.map; m.emissiveMap = f.emi; m.userData.tile.value.copy(f.tile); m.needsUpdate = true;
+  });
+  grassMat.map = WORLD.city ? cityGroundTex : grassTex; grassMat.needsUpdate = true;
+  moundMat.color.copy(col(WORLD.city ? 0x30333b : 0x4f7f45));
+  poolMat.color.set(WORLD.city ? 0xbfe4ff : 0xffc77a);
+  BLD.forEach(newBuilding);
+  if (Music.tracks) {
+    const race = Music.tracks.find(t => t.n === 'race');
+    const src = pack.music || AUD.music_race;
+    if (race && race._src !== src) { race._src = src; race.el.src = src; race.vol = 0; }
+  }
+  Music.raceSrc = pack.music || AUD.music_race;
+}
+function setWorld(id) {
+  const w = worldById(id);
+  if (!worldUnlocked(w)) return Promise.reject(new Error('locked'));
+  save.world = w.id; persist();
+  return loadWorldPack(w.id).then(pack => { applyWorldNow(w.id, pack); return w; });
+}
+function renderWorlds() {
+  const sel = save.world || 'neon', lv = playerLevel().level;
+  $('wd-coins').textContent = fmt(save.coins);
+  const lines = [['neon', 'tokyo'], ['neon', 'miami'], ['neon', 'desert'], ['tokyo', 'touge']].map(([a, b]) => {
+    const A = worldById(a), B = worldById(b);
+    return `<line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" class="${B.soon ? 'soon' : ''}"/>`;
+  }).join('');
+  const nodes = WORLDS.map(w => {
+    const ok = worldUnlocked(w);
+    return `<g class="node ${w.id === sel ? 'sel' : ''} ${ok ? '' : 'locked'} ${w.soon ? 'soon' : ''}" data-action="pick-world" data-id="${w.id}" transform="translate(${w.x} ${w.y})">
+      <circle r="4.2"/><circle r="2" class="core"/><text y="-6.5">${w.name}</text></g>`;
+  }).join('');
+  $('wd-map').innerHTML = `<svg viewBox="0 0 100 90" preserveAspectRatio="xMidYMid meet"><defs><pattern id="wdgrid" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M6 0H0V6" fill="none" stroke="rgba(0,240,255,.12)" stroke-width=".3"/></pattern></defs><rect width="100" height="90" fill="url(#wdgrid)"/>${lines}${nodes}</svg>`;
+  $('wd-list').innerHTML = WORLDS.map(w => {
+    const ok = worldUnlocked(w), cur = w.id === sel;
+    let btn;
+    if (w.soon) btn = '<button class="btn sm ghost" disabled>COMING SOON</button>';
+    else if (cur) btn = '<button class="btn sm ghost" disabled>SELECTED</button>';
+    else if (ok) btn = `<button class="btn sm primary" data-action="pick-world" data-id="${w.id}">DRIVE HERE</button>`;
+    else btn = `<button class="btn sm gold" data-action="buy-world" data-id="${w.id}" ${save.coins < w.unlock.coins ? 'disabled' : ''}>🪙 ${fmt(w.unlock.coins)}</button>`;
+    const lock = !ok && !w.soon ? `<div class="desc">Unlocks at LVL ${w.unlock.lvl} (you are LVL ${lv}) or with coins</div>` : '';
+    return `<div class="card ${cur ? 'sel' : ''}" style="cursor:default"><div class="info"><div class="name">${ok || w.soon ? '' : '🔒 '}${w.name}</div><div class="desc">${w.sub}</div>${lock}</div>${btn}</div>`;
+  }).join('');
+}
+function openWorlds() { renderWorlds(); show('worlds'); }
+
+/* =====================================================================
+   v12: GARAGE — trade-offs on cars and upgrades, and the tuning shop
+   ===================================================================== */
+function traitChips(id) {
+  const t = traitOf(id);
+  return `<div class="traits">${t.pros.map(p => `<span class="pro">▲ ${p}</span>`).join('')}${t.cons.map(p => `<span class="con">▼ ${p}</span>`).join('')}</div>`;
+}
+function chipRow(group, options, current, locked) {
+  return `<div class="chips">${options.map(([val, label, sw]) => `<button class="chip-opt ${val === current ? 'on' : ''}" data-action="tune" data-g="${group}" data-v="${val}" ${locked ? 'disabled' : ''}>${sw ? `<i style="background:${sw}"></i>` : ''}${label}</button>`).join('')}</div>`;
+}
+function tuneCard(title, desc, part, body, carId) {
+  const own = !part || ownsPart(carId, part);
+  const btn = own ? '' : `<button class="btn sm gold" data-action="buy-part" data-part="${part}" ${save.coins < PART_PRICE[part] ? 'disabled' : ''}>🪙 ${fmt(PART_PRICE[part])}</button>`;
+  return `<div class="card tune ${own ? '' : 'locked'}" style="cursor:default"><div class="info"><div class="name">${title}</div><div class="desc">${desc}</div>${body}</div>${btn}</div>`;
+}
+const hexCss = h => '#' + h.toString(16).padStart(6, '0');
+const rgbCss = c => `rgb(${c.map(v => Math.round(v * 255)).join(',')})`;
+function renderTuning(L) {
+  const id = previewId || save.selected, car = carById(id);
+  if (!save.owned.includes(id)) { L.innerHTML = `<div class="card" style="cursor:default"><div class="info"><div class="name">🔒 ${car.name}</div><div class="desc">Buy this car to tune it.</div></div></div>`; return; }
+  const t = tuneOf(id);
+  const neon = [['off', 'OFF'], ...Object.keys(NEON_COLS).map(k => [k, k.toUpperCase(), rgbCss(NEON_COLS[k])])];
+  const rims = Object.keys(RIM_COLS).map(k => [k, k.toUpperCase(), RIM_COLS[k] ? hexCss(RIM_COLS[k]) : '#555a66']);
+  const stripes = [['none', 'NONE'], ['twin', 'TWIN'], ['center', 'CENTER']];
+  const scol = Object.keys(STRIPE_COLS).map(k => [k, k.toUpperCase(), hexCss(STRIPE_COLS[k])]);
+  const flame = Object.keys(FLAME_COLS).map(k => [k, k.toUpperCase(), rgbCss(FLAME_COLS[k])]);
+  const tires = Object.keys(TIRES).map(k => [k, TIRES[k].name]);
+  const gears = Object.keys(GEARS).map(k => [k, GEARS[k].name]);
+  const tr = TIRES[t.tires], gr = GEARS[t.gears];
+  L.innerHTML = `<div class="tune-head">TUNING · ${car.name.toUpperCase()}</div>` +
+    tuneCard('UNDERGLOW NEON', 'Lights the road under your car — brightest at night.', 'glow', chipRow('glow', neon, t.glow, !ownsPart(id, 'glow')), id) +
+    tuneCard('RIMS', 'Wheel finish. Neon rims glow in the dark.', 'rims', chipRow('rims', rims, t.rims, !ownsPart(id, 'rims')), id) +
+    tuneCard('LIVERY STRIPES', 'Racing stripes over the bonnet, roof and boot.', 'stripe', chipRow('stripe', stripes, t.stripe, !ownsPart(id, 'stripe')) + chipRow('stripeCol', scol, t.stripeCol, !ownsPart(id, 'stripe')), id) +
+    tuneCard('NITRO FLAME', 'Colour of the exhaust flame when you boost.', 'flame', chipRow('flame', flame, t.flame, !ownsPart(id, 'flame')), id) +
+    tuneCard('TYRES', `<b class="pro">▲ ${tr.pros}</b> · <b class="con">▼ ${tr.cons}</b>`, null,
+      `<div class="chips">${tires.map(([k, n]) => {
+        const own = k === 'sport' || ownsPart(id, k);
+        return own ? `<button class="chip-opt ${k === t.tires ? 'on' : ''}" data-action="tune" data-g="tires" data-v="${k}">${n}</button>`
+          : `<button class="chip-opt buy" data-action="buy-part" data-part="${k}" ${save.coins < PART_PRICE[k] ? 'disabled' : ''}>${n} · 🪙${PART_PRICE[k]}</button>`;
+      }).join('')}</div>`, id) +
+    tuneCard('GEARING', `<b class="pro">▲ ${gr.pros}</b> · <b class="con">▼ ${gr.cons}</b>`, 'gears', chipRow('gears', gears, t.gears, !ownsPart(id, 'gears')), id);
+}
+function setTune(group, val) {
+  const id = previewId || save.selected; if (!save.owned.includes(id)) return;
+  const t = tuneOf(id); t[group] = val; save.tuning[id] = sanitizeTune(t); persist();
+  if (playerModel) applyTuning(id, save.tuning[id]);
+  AudioSys.sfx('click'); renderGarage();
+}
+function buyPart(part) {
+  const id = previewId || save.selected, price = PART_PRICE[part];
+  if (!save.owned.includes(id) || save.coins < price || ownsPart(id, part)) { AudioSys.sfx('error'); return; }
+  save.coins -= price; save.parts = save.parts || {}; (save.parts[id] = save.parts[id] || []).push(part);
+  const t = tuneOf(id);
+  if (part === 'glow' && t.glow === 'off') t.glow = 'cyan';
+  if (part === 'rims' && t.rims === 'stock') t.rims = 'chrome';
+  if (part === 'stripe' && t.stripe === 'none') t.stripe = 'twin';
+  if (part === 'flame') t.flame = 'pink';
+  if (part === 'slick' || part === 'rain') t.tires = part;
+  save.tuning[id] = sanitizeTune(t); persist();
+  if (playerModel) applyTuning(id, save.tuning[id]);
+  AudioSys.sfx('buy'); toast('TUNED!', carById(id).name, '#ff2bd6'); renderGarage();
+}
+
+/* =====================================================================
+   v12: CAR BETS (pink slips) — online, enforced by the Supabase backend
+   ===================================================================== */
+const SB = { url: 'https://vqcqexmscfkfhrylmwfw.supabase.co', key: 'sb_publishable_xl4zjy5_P_oB-iS3QkgOSg_dd10_I_l' };
+const BET_ERRORS = {
+  auth: 'This device could not be verified.', car: 'That car cannot be bet.', car_busy: 'That car is already on the line in another bet.',
+  too_many: 'You already have 3 open bets.', not_found: 'Bet not found. Check the code.', not_open: 'This bet was already taken or has expired.',
+  own_bet: "You can't take your own bet.", stake_too_low: 'Your stake must be worth at least half of their car.', score: 'Invalid score.',
+  not_accepted: 'This bet is no longer active.',
+};
+function netIdentity() {
+  if (!save.netId || !save.netSecret) {
+    const r = crypto.getRandomValues(new Uint8Array(24));
+    save.netId = crypto.randomUUID ? crypto.randomUUID() : ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+    save.netSecret = Array.from(r, b => b.toString(16).padStart(2, '0')).join('');
+    persist();
+  }
+  return { p_id: save.netId, p_secret: save.netSecret };
+}
+async function rpc(name, args) {
+  const r = await fetch(`${SB.url}/rest/v1/rpc/${name}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB.key }, body: JSON.stringify(args),
+  });
+  const txt = await r.text(); let data = null; try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = txt; }
+  if (!r.ok) {
+    const code = data && data.message ? String(data.message) : 'network';
+    const e = new Error(BET_ERRORS[code] || 'Connection problem. Try again.'); e.code = code; throw e;
+  }
+  return data;
+}
+const escrowed = id => !!(save.escrow && save.escrow[id]);
+function betCars(minPrice) {
+  return CARS.filter(c => c.id !== 'red' && save.owned.includes(c.id) && !escrowed(c.id) && c.price >= minPrice);
+}
+function carOptionHtml(list, sel) {
+  return list.map(c => `<button class="bet-car ${c.id === sel ? 'on' : ''}" data-action="bet-pick" data-id="${c.id}"><i style="background:${c.hex}"></i><b>${c.name}</b><small>🪙 ${fmt(c.price)}</small></button>`).join('');
+}
+let betDraft = null, lastSync = 0, activeBets = [];
+// Challenger: bet a car on the score of the run that just ended
+function openBetCreate() {
+  if (!lastResult || lastResult.score < 1) return;
+  const list = betCars(1);
+  betDraft = { mode: 'create', car: list[0] ? list[0].id : null };
+  $('bet-title').textContent = 'BET A CAR';
+  $('bet-text').innerHTML = `Bet one of your cars on your score of <b>${fmt(lastResult.score)}</b>. Your friend races your exact setup and must stake a car worth at least half of yours. <b>If they beat you, they keep your car. If they fail, you win theirs.</b>`;
+  $('bet-cars').innerHTML = list.length ? carOptionHtml(list, betDraft.car) : '<p class="bet-empty">Buy another car in the garage first — your starter car cannot be bet.</p>';
+  $('bet-go').textContent = 'CREATE BET'; $('bet-go').disabled = !list.length; $('bet-go').hidden = false; $('bet-copy').hidden = false;
+  $('bet-link').hidden = true; $('bet-status').textContent = '';
+  $('bet-dialog').showModal();
+}
+async function betGo() {
+  const st = $('bet-status');
+  if (!betDraft || !betDraft.car) return;
+  $('bet-go').disabled = true; st.textContent = 'Connecting…';
+  try {
+    if (betDraft.mode === 'create') {
+      const setup = { car: lastResult.car, upgrades: lastResult.upgrades, tune: lastResult.tune, dist: lastResult.dist, combo: lastResult.combo };
+      const code = await rpc('ns_create_bet', { ...netIdentity(), p_name: cleanNickname(save.nickname), p_car: betDraft.car, p_score: lastResult.score, p_setup: setup });
+      save.escrow = save.escrow || {}; save.escrow[betDraft.car] = code;
+      if (save.selected === betDraft.car) save.selected = 'red';
+      persist();
+      const url = new URL(location.href); url.search = ''; url.hash = 'bet=' + code;
+      const link = /^https?:$/.test(url.protocol) ? url.href : code;
+      $('bet-link').hidden = false; $('bet-link').value = `🏁 ${cleanNickname(save.nickname)} bets the ${carById(betDraft.car).name} on ${fmt(lastResult.score)} pts in Neon Speed. Beat it and the car is yours: ${link}`;
+      $('bet-go').hidden = true;
+      st.innerHTML = `Bet <b>${code}</b> is live for 48 h. Your ${carById(betDraft.car).name} is locked until it ends. Send the link:`;
+      if (navigator.share) navigator.share({ text: $('bet-link').value }).catch(() => {});
+      AudioSys.sfx('mission');
+    } else {
+      const b = betDraft.bet;
+      const r = await rpc('ns_accept_bet', { p_code: b.code, ...netIdentity(), p_name: cleanNickname(save.nickname), p_car: betDraft.car });
+      save.escrow = save.escrow || {}; save.escrow[betDraft.car] = b.code;
+      if (save.selected === betDraft.car) save.selected = 'red';
+      persist();
+      const s = r.setup || {};
+      activeChallenge = { v: 1, name: cleanNickname(r.name), score: r.score, dist: Number.isSafeInteger(s.dist) ? s.dist : 0, combo: Number.isSafeInteger(s.combo) ? s.combo : 0,
+        car: r.car, upgrades: s.upgrades || { engine: 0, handling: 0, nitro: 0, magnet: 0 }, tune: s.tune };
+      activeBet = { code: b.code, myCar: betDraft.car, theirCar: r.car, theirName: r.name, score: r.score };
+      $('bet-dialog').close();
+      startRun();
+    }
+  } catch (e) {
+    st.textContent = e.message; $('bet-go').disabled = false;
+  }
+}
+let activeBet = null;
+// Taker: open a bet link
+async function openBetLink(code) {
+  $('bet-title').textContent = 'PINK SLIP CHALLENGE'; $('bet-copy').hidden = true;
+  $('bet-text').textContent = 'Loading bet…'; $('bet-cars').innerHTML = ''; $('bet-go').hidden = true; $('bet-link').hidden = true; $('bet-status').textContent = '';
+  if (!$('bet-dialog').open) $('bet-dialog').showModal();
+  try {
+    const b = await rpc('ns_get_bet', { p_code: code });
+    if (!b) { $('bet-text').textContent = BET_ERRORS.not_found; return; }
+    if (b.status !== 'open') { $('bet-text').textContent = BET_ERRORS.not_open; return; }
+    const theirs = carById(b.car), min = Math.ceil(theirs.price / 2);
+    const list = betCars(min);
+    betDraft = { mode: 'accept', bet: b, car: list[0] ? list[0].id : null };
+    $('bet-text').innerHTML = `<b>${cleanNickname(b.name)}</b> bets their <b style="color:${theirs.hex}">${theirs.name}</b>. Beat <b>${fmt(b.score)}</b> points driving their setup and the car is yours.<br>Stake one of your cars (worth 🪙 ${fmt(min)} or more). <b>If you fail, they keep your car.</b> One attempt, starts right away.`;
+    $('bet-cars').innerHTML = list.length ? carOptionHtml(list, betDraft.car) : `<p class="bet-empty">You need a car worth 🪙 ${fmt(min)} or more to take this bet.</p>`;
+    $('bet-go').textContent = 'ACCEPT & RACE'; $('bet-go').hidden = false; $('bet-go').disabled = !list.length;
+  } catch (e) { $('bet-text').textContent = e.message; }
+}
+function giveCar(id) {
+  if (save.owned.includes(id)) { const c = carById(id); save.coins += c.price; return `already owned → +${fmt(c.price)} coins`; }
+  save.owned.push(id); return 'added to your garage';
+}
+function loseCar(id) {
+  save.owned = save.owned.filter(x => x !== id);
+  if (save.tuning) delete save.tuning[id];
+  if (save.parts) delete save.parts[id];
+  if (save.selected === id) save.selected = 'red';
+}
+async function betFinish() {
+  const b = activeBet; activeBet = null; activeChallenge = null; if (!b) return;
+  const el = $('go-outcome');
+  try {
+    const r = await rpc('ns_submit_result', { p_code: b.code, ...netIdentity(), p_score: Math.floor(run.score) });
+    if (save.escrow) delete save.escrow[b.myCar];
+    if (r.won) {
+      const how = giveCar(b.theirCar);
+      el.innerHTML = `🏆 <b>YOU WON THE ${carById(b.theirCar).name.toUpperCase()}!</b> (${how})`; AudioSys.sfx('mission');
+    } else {
+      loseCar(b.myCar);
+      el.innerHTML = `💀 <b>${cleanNickname(b.theirName)} keeps your ${carById(b.myCar).name}.</b> Win it back with a bet of your own.`;
+    }
+    persist(); refreshMenu();
+  } catch (e) { el.textContent = 'Could not send the bet result: ' + e.message + ' It will be settled on your next connection.'; }
+}
+// Apply everything decided on the server (wins, losses, expiries)
+async function betSync(force) {
+  if (!save.netId || (!force && Date.now() - lastSync < 30000)) return;
+  lastSync = Date.now();
+  try {
+    const r = await rpc('ns_sync', netIdentity());
+    activeBets = r.active || [];
+    const msgs = [];
+    (r.outcomes || []).forEach(o => {
+      if (save.escrow) delete save.escrow[o.my_car];
+      if (o.status === 'cancelled') { msgs.push(`Bet ${o.code} expired — your ${carById(o.my_car).name} is free again.`); return; }
+      if (o.won) msgs.push(`🏆 You beat ${cleanNickname(o.their_name)} and won the ${carById(o.their_car).name} (${giveCar(o.their_car)}).`);
+      else { loseCar(o.my_car); msgs.push(`💀 ${cleanNickname(o.their_name)} won your ${carById(o.my_car).name}${o.their_score ? ` with ${fmt(o.their_score)} pts` : ''}.`); }
+    });
+    // release local locks the server no longer knows about
+    if (save.escrow) Object.keys(save.escrow).forEach(car => { if (!activeBets.some(a => a.my_car === car) && !(activeBet && activeBet.myCar === car)) delete save.escrow[car]; });
+    persist();
+    if (msgs.length) {
+      $('bet-title').textContent = 'BET RESULTS'; $('bet-copy').hidden = true; $('bet-text').innerHTML = msgs.map(m => `<p>${m}</p>`).join('');
+      $('bet-cars').innerHTML = ''; $('bet-go').hidden = true; $('bet-link').hidden = true; $('bet-status').textContent = '';
+      if (!$('bet-dialog').open) $('bet-dialog').showModal();
+      if (state === 'menu') refreshMenu();
+    }
+    renderBetList();
+  } catch (e) { /* offline: try again later */ }
+}
+function renderBetList() {
+  const el = $('bet-list'); if (!el) return;
+  if (!activeBets.length) { el.textContent = 'No active car bets.'; return; }
+  el.innerHTML = activeBets.map(a => `<div class="friend-history-row">${a.role === 'challenger' ? '🏁' : '🎯'} ${carById(a.my_car).name} · ${a.status === 'open' ? `waiting for a rival · code <b>${a.code}</b>` : `vs ${cleanNickname(a.their_name || '')} · racing now`}
+    ${a.role === 'challenger' && a.status === 'open' ? ` <button class="btn ghost sm" data-action="bet-cancel" data-code="${a.code}">CANCEL</button>` : ''}</div>`).join('');
+}
+async function betCancel(code) {
+  try { await rpc('ns_cancel_bet', { p_code: code, ...netIdentity() }); lastSync = 0; await betSync(true); toast('BET CANCELLED', 'Your car is free again', '#00f0ff'); }
+  catch (e) { toast('ERROR', e.message, '#ff3b5c'); }
+}
+
+window.NS_BUILD = 'ab72fa4e';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
@@ -3556,6 +4078,10 @@ $('friend-code').addEventListener('input', () => {
 $('racer-name').addEventListener('change', saveNickname);
 const incomingChallenge = new URLSearchParams(location.hash.slice(1)).get('challenge');
 if (incomingChallenge) { openFriends(); $('friend-code').value = incomingChallenge; previewChallenge(); }
+const incomingBet = new URLSearchParams(location.hash.slice(1)).get('bet');
+if (incomingBet) openBetLink(incomingBet.toUpperCase());
+if (save.world && save.world !== 'neon') setWorld(save.world).catch(() => { save.world = 'neon'; });
+betSync(true);
 requestAnimationFrame(t => { last = t; frame(t); });
 
 // Small hook for automated testing
@@ -3567,6 +4093,6 @@ window.NeonSpeed = {
   get audio() { return { ready: AudioSys.ready, samples: AudioSys.buf ? Object.keys(AudioSys.buf) : [], music: Music.tracks ? Music.tracks.map(t => t.n + ':' + (t.el.paused ? 'paused' : 'playing') + ':' + t.vol.toFixed(2)) : null }; },
   get drawCalls() { return renderer.info.render.calls; },
   step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); },
-  get police() { return police; }, startChase, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
+  get police() { return police; }, startChase, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
 };
 })();

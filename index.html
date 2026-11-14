@@ -339,6 +339,42 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .bcard .prog i{display:block;height:100%;background:var(--yellow)}
 .bcard .ptxt{font-size:11px;color:#9aa1c4;margin-top:2px}
 @media(max-width:600px){.pr-stats{gap:6px}.pr-stats .s{padding:5px 7px}.pr-stats label{font-size:8.5px;letter-spacing:.06em}.pr-stats b{font-size:13px}.pr-top .pr-av svg{width:70px;height:70px}}
+
+/* ---------- v12: car traits, tuning shop, worlds map, car bets ---------- */
+.traits{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:5px;font-size:11.5px;font-weight:700;letter-spacing:.02em}
+.traits .pro,.desc .pro{color:#3dff8a}.traits .con,.desc .con{color:#ff7a8e}
+.desc b.pro,.desc b.con{font-weight:700}
+.tune-head{font-family:'Orbitron';font-weight:900;font-size:13px;letter-spacing:.12em;color:var(--pink);margin:2px 0 4px}
+.card.tune.locked .chips{opacity:.45}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.chip-opt{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);color:#e6e9ff;font:700 11px 'Rajdhani',sans-serif;letter-spacing:.08em;cursor:pointer}
+.chip-opt i{width:12px;height:12px;border-radius:50%;box-shadow:0 0 8px currentColor}
+.chip-opt.on{border-color:var(--cyan);background:rgba(0,240,255,.14);color:#fff;box-shadow:0 0 10px rgba(0,240,255,.3)}
+.chip-opt.buy{border-color:rgba(255,210,63,.5);color:var(--yellow)}
+.chip-opt:disabled{cursor:default}
+#worlds .sheet{width:min(720px,100%)}
+#wd-map{height:min(36vh,300px);border-radius:16px;background:radial-gradient(ellipse at 50% 60%,#160c3a,#05061a 75%);border:1px solid rgba(0,240,255,.25);overflow:hidden}
+#wd-map svg{width:100%;height:100%;display:block}
+#wd-map line{stroke:var(--cyan);stroke-width:.6;stroke-dasharray:2 1.2;opacity:.75;filter:drop-shadow(0 0 1px #00f0ff)}
+#wd-map line.soon{stroke:#6b6f8f;opacity:.4}
+#wd-map .node{cursor:pointer}
+#wd-map .node circle{fill:rgba(0,240,255,.15);stroke:var(--cyan);stroke-width:.6}
+#wd-map .node .core{fill:var(--cyan);stroke:none}
+#wd-map .node text{fill:#fff;font:700 3.2px 'Orbitron',sans-serif;text-anchor:middle;letter-spacing:.2px;paint-order:stroke;stroke:#05061a;stroke-width:.8px}
+#wd-map .node.sel circle{fill:rgba(255,43,214,.3);stroke:var(--pink);animation:wdpulse 1.2s ease-in-out infinite alternate}
+#wd-map .node.sel .core{fill:var(--pink)}
+#wd-map .node.locked circle{stroke:#ffd23f}#wd-map .node.locked .core{fill:#ffd23f}
+#wd-map .node.soon{opacity:.45;cursor:default}#wd-map .node.soon circle{stroke:#8a8fb0}#wd-map .node.soon .core{fill:#8a8fb0}
+@keyframes wdpulse{to{stroke-width:1.4}}
+.bet-cars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:12px 0}
+.bet-car{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:10px 12px;border-radius:12px;border:1px solid #36546d;background:#030819;color:#fff;cursor:pointer;font:inherit;text-align:left}
+.bet-car i{width:100%;height:8px;border-radius:4px}
+.bet-car b{font-family:'Orbitron';font-size:12px}.bet-car small{color:var(--yellow);font-weight:700}
+.bet-car.on{border-color:var(--pink);box-shadow:0 0 14px rgba(255,43,214,.45)}
+.bet-empty{color:#ff9aa8!important}
+#bet-dialog .bet-hero{font:900 13px 'Orbitron';letter-spacing:.14em;color:var(--pink)}
+#bet-link{min-height:70px}
+.go-btns .btn.bet{background:linear-gradient(90deg,#ffd23f,#ff7a2f);color:#1a0d00}
 </style>
 </head>
 <body>
@@ -364,6 +400,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     <div class="row">
       <button class="btn ghost" data-action="garage">GARAGE</button>
       <button class="btn ghost" data-action="profile">PROFILE</button>
+      <button class="btn ghost" data-action="worlds">WORLDS · <span id="menu-world">NEON CITY</span></button>
       <button class="btn ghost" data-action="friends">FRIENDS</button>
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="settings">SETTINGS</button>
@@ -401,7 +438,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 <div id="garage" class="screen">
   <div class="panel sheet">
     <div class="sheet-head"><h2>GARAGE</h2><span class="coins-pill">🪙 <span id="g-coins">0</span></span></div>
-    <div class="tabs"><button class="tab on" data-action="tab-cars" id="tab-cars">CARS</button><button class="tab" data-action="tab-upg" id="tab-upg">UPGRADES</button></div>
+    <div class="tabs"><button class="tab on" data-action="tab-cars" id="tab-cars">CARS</button><button class="tab" data-action="tab-upg" id="tab-upg">UPGRADES</button><button class="tab" data-action="tab-tune" id="tab-tune">TUNING</button></div>
     <div class="list" id="g-list"></div>
     <button class="btn ghost" data-action="back">BACK</button>
   </div>
@@ -464,6 +501,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
   <div class="go-btns">
     <button class="btn primary" data-action="restart">TRY AGAIN</button>
     <button class="btn pink" id="go-share" data-action="share-result">CHALLENGE FRIENDS</button>
+    <button class="btn bet" id="go-bet" data-action="bet-create" hidden>🏁 BET A CAR</button>
     <button class="btn ghost" data-action="garage">GARAGE</button>
     <button class="btn ghost" data-action="menu">MENU</button>
   </div>
@@ -511,6 +549,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
   <p id="friend-error" role="status"></p><p id="friend-preview"></p>
   <div class="modal-actions"><button class="btn primary sm" id="friend-start" data-action="accept-challenge" disabled>ACCEPT & RACE</button><button class="btn ghost sm" data-action="preview-challenge">CHECK CODE</button><button class="btn ghost sm" data-action="close-friends">BACK</button></div>
   <p>Same car and upgrades for both players. Traffic varies. These are friendly, unverified scores — no online leaderboard.</p>
+  <label>CAR BETS · ONLINE</label><p>Bet a car from the game over screen. Got a bet code? Enter it here.</p><div class="modal-actions"><input id="bet-code" maxlength="80" placeholder="Bet code or link" style="flex:1;min-width:160px"><button class="btn gold sm" data-action="bet-code">OPEN BET</button></div><div id="bet-list"></div>
   <label>RECENT CHALLENGES · THIS DEVICE</label><div id="friend-history"></div>
 </dialog>
 <dialog id="share-dialog" class="friend-modal" aria-labelledby="share-title">
@@ -520,6 +559,26 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
   <div class="modal-actions"><button class="btn primary sm" data-action="native-share">SHARE CHALLENGE</button><button class="btn ghost sm" data-action="copy-challenge" id="copy-challenge">COPY CODE</button><button class="btn pink sm" data-action="download-card">SAVE CARD</button><button class="btn ghost sm" data-action="close-share">BACK</button></div>
   <p id="share-status" role="status"></p>
 </dialog>
+<dialog id="bet-dialog" class="friend-modal" aria-labelledby="bet-title">
+  <div class="bet-hero">PINK SLIP · WINNER TAKES THE CAR</div>
+  <h2 id="bet-title">BET A CAR</h2>
+  <div id="bet-text"></div>
+  <div class="bet-cars" id="bet-cars"></div>
+  <textarea id="bet-link" readonly hidden spellcheck="false"></textarea>
+  <p id="bet-status" role="status"></p>
+  <div class="modal-actions"><button class="btn gold sm" id="bet-go" data-action="bet-go">CREATE BET</button><button class="btn ghost sm" id="bet-copy" data-action="bet-copy">COPY LINK</button><button class="btn ghost sm" data-action="bet-close">CLOSE</button></div>
+  <p>Bets are settled online. Your staked car is locked until the bet ends. Unanswered bets expire after 48 h and the car comes back.</p>
+</dialog>
+<!-- WORLDS -->
+<div id="worlds" class="screen dim">
+  <div class="panel sheet">
+    <div class="sheet-head"><h2>WORLDS</h2><span class="coins-pill">🪙 <span id="wd-coins">0</span></span></div>
+    <div id="wd-map"></div>
+    <p id="wd-status" role="status" style="min-height:18px;color:#b8c5df;margin:6px 2px"></p>
+    <div class="list" id="wd-list"></div>
+    <button class="btn ghost" data-action="back">BACK</button>
+  </div>
+</div>
 <!-- TOUCH -->
 <div id="touch">
   <div class="tgroup"><button class="tbtn" data-touch="left" aria-label="Left">◀</button><button class="tbtn" data-touch="right" aria-label="Right">▶</button></div>
@@ -624,15 +683,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=1b357d8def'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=597bd79d92'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 13762820;
-  fetch('game.js?v=1b357d8def').then(function (r) {
+  var TOTAL = 13799541;
+  fetch('game.js?v=597bd79d92').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
