@@ -2177,7 +2177,7 @@ function updateTraffic(dt, ws) {
     if (!v.crossed && v.z > 0) {
       v.crossed = true;
       const gap = dx - (m.halfW + P_HW);
-      if (gap < 1.2) nearMiss(v, gap); else { run.overtakes++; addScore(10); }
+      if (gap < 1.2) nearMiss(v, gap); else { run.overtakes++; addScore(10); heatAdd(1.2); }
     }
   }
 }
@@ -2249,7 +2249,7 @@ function collectPowerup(type, x, z) {
 }
 
 /* ---------- Scoring events ---------- */
-function addScore(v) { run.score += v * (player.x2 > 0 ? 2 : 1); }
+function addScore(v) { run.score += v * (player.x2 > 0 ? 2 : 1) * heatMul(); }
 function nearMiss(v, gap) {
   run.combo++; run.comboTimer = 3.2; run.nearMisses++;
   run.bestCombo = Math.max(run.bestCombo, run.combo);
@@ -2546,7 +2546,7 @@ function updateGlows(t) {
   }
   coins.forEach(c => { if (c.z > -220) glow.add(c.x, c.y, c.z, 2.4, 1, 0.75, 0.2, 0.18 + 0.5 * n); });
   powerups.forEach(p => { const c = PU_TYPES[p.type].rgb; glow.add(p.x, p.mesh.position.y, p.z, 5, c[0], c[1], c[2], 0.9); });
-  policeFx(t); heliFx(t); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
+  policeFx(t); heliFx(t); heatFx(t); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
   if (ghostModel.root.visible) glow.add(ghostModel.root.position.x, 0.8, ghostModel.root.position.z, 4, 0, 0.9, 1, 0.35);
 }
 function updateGhost() {
@@ -3245,7 +3245,7 @@ function update(realDt) {
   Music.update(realDt, Weather.rain);
   Refl.begin();
   updateTraffic(dt, ws);
-  updatePolice(dt); updateHeli(dt);
+  updatePolice(dt); updateHeli(dt); updateHeat(dt, ws);
   updatePickups(dt, ws, simTime);
   updatePlayerVisual(dt, ws);
   updateGhost();
@@ -3278,7 +3278,8 @@ function frame(now) {
 const COP = {
   CONTACT: 4.7,      // gap (m) at which the cop touches your bumper
   ESCAPE: 46,        // gap (m) at which you lose them
-  START: 17,         // gap once the cop has caught up behind you
+  START: 14,         // gap once the cop has caught up behind you
+  TAIL: 8.5,         // v17: distancia a la que se queda pegado si no usas nitro
   TIME: 20,          // seconds you must survive
   REWARD_PTS: 1000, REWARD_COINS: 100,
 };
@@ -3399,7 +3400,7 @@ function startChase() {
 function endChase(result) {
   if (!police.active) return;
   police.active = false; police.phase = result;
-  run.nextCop = run.dist + rand(2300, 3600);
+  run.nextCop = run.dist + rand(2300, 3600) * heatCd();
   if (result === 'escaped' || result === 'shield') {
     run.escapes++;
     addScore(COP.REWARD_PTS); run.bonusCoins += COP.REWARD_COINS;
@@ -3410,7 +3411,7 @@ function endChase(result) {
   fadeSiren();
 }
 function updatePolice(dt) {
-  if (state === 'playing' && !police.active && run.dist >= run.nextCop) {
+  if (state === 'playing' && !police.active && run.dist >= run.nextCop && heatLv() >= 3) {
     if (Zones.tunnel > 0.05 || run.dist < 1200 || heli.phase !== 'off') run.nextCop = run.dist + 200; else startChase();
   }
   const m = copModel;
@@ -3432,10 +3433,13 @@ function updatePolice(dt) {
     if (police.warn <= 0) police.phase = 'chase';
   } else {
     // The cop matches your speed plus a little; braking, walls and slowdowns let it close in fast
-    let close = 0.85 + 0.35 * difficulty();
+    // v17: corre más. Sin nitro se pega a tu cola (siempre a la vista) y luego aprieta poco a poco
+    const far = police.gap > COP.TAIL;
+    let close = far ? 3.4 + 0.35 * difficulty() : 0.3 + 0.2 * difficulty();
+    if (police.two) close *= 1.25;
     if (player.brake) close += 7;
     if (player.wall) close += 5;
-    const copSpeed = Math.min(topNoNitro * 1.02 + 1.2, player.speed + close + Math.max(0, topNoNitro - player.speed) * 0.6);
+    const copSpeed = Math.min(topNoNitro * 1.07 + 2, player.speed + close + Math.max(0, topNoNitro - player.speed) * 0.6);
     police.gap += (player.speed - copSpeed) * dt;
     police.t -= dt;
     if (police.gap >= COP.ESCAPE || police.t <= 0) { endChase('escaped'); return; }
@@ -3456,7 +3460,7 @@ function updatePolice(dt) {
   }
   police.x = damp(police.x, clamp(tx, -X_LIMIT, X_LIMIT), 2.2, dt);
   if (m) {
-    m.root.visible = police.gap < 20;
+    m.root.visible = police.gap < 34;
     m.root.position.set(police.x, 0, police.gap);
     m.root.rotation.y = clamp((police.x - (m._px || police.x)) * -0.6, -0.15, 0.15);
     m._px = police.x;
@@ -4179,14 +4183,14 @@ function startHeli() {
 }
 function heliLeave(hit) {
   heli.phase = 'leave'; heli.t = 0;
-  run.nextHeli = run.dist + (hit ? rand(3800, 5200) : rand(2600, 3800));
+  run.nextHeli = run.dist + (hit ? rand(3800, 5200) : rand(2600, 3800)) * heatCd();
 }
 function updateHeli(dt) {
   if (player.emp > 0) player.emp = Math.max(0, player.emp - dt);
   if (state !== 'playing') { if (state !== 'paused' && heli.phase !== 'off') resetHeli(); return; }
   const m = heli.model, C = HELI_CFG;
   if (heli.phase === 'off') {
-    if (run.dist >= run.nextHeli && !police.active && player.emp <= 0) {
+    if (run.dist >= run.nextHeli && !police.active && player.emp <= 0 && heatLv() >= 2) {
       if (Zones.tunnel > 0.05 || run.dist < C.MIN_DIST || run.time < 10 || player.invuln > 0) run.nextHeli = run.dist + 150;
       else startHeli();
     }
@@ -4314,6 +4318,161 @@ function heliSoundStop(now) {
     if (now) { s.osc.stop(); s.lfo.stop(); }
     else { s.g.gain.setTargetAtTime(0.0001, t, 0.4); s.osc.stop(t + 2.2); s.lfo.stop(t + 2.2); }
   } catch (e) {}
+}
+
+/* =====================================================================
+   v17: HEAT — cuanto más arriesgas, más te caza la ciudad
+   Sube con casi-choques, adelantamientos, nitro y velocidad punta; baja si
+   conduces limpio y rápido en los túneles. Cada nivel multiplica los puntos y
+   activa un cazador: 2 helicóptero · 3 policía · 4 control de carretera.
+   ===================================================================== */
+const HEAT = {
+  MUL: [1, 1.2, 1.4, 1.65, 2],
+  NAME: ['CALM', 'WARM', 'HOT', 'BLAZING', 'INFERNO'],
+  MSG: ['', 'Helicopters join the hunt', 'Police patrols join the hunt', 'Roadblocks ahead — find the gap!', 'INFERNO · points ×2'],
+  COL: ['#7ff6ff', '#ffd23f', '#ff9a2b', '#ff4d2b', '#ff2bd6'],
+  RB_MIN: 3200,
+};
+function heatLv() { return (typeof run === 'object' && run && run.heat !== undefined) ? Math.min(5, Math.floor(run.heat / 20) + 1) : 1; }
+function heatMul() { return HEAT.MUL[heatLv() - 1]; }
+function heatCd() { const l = heatLv(); return l >= 5 ? 0.6 : l >= 4 ? 0.8 : 1; }
+function heatInit() { run.heat = 0; run.heatLv = 1; run.maxHeat = 0; run.nextRB = HEAT.RB_MIN + rand(0, 700); run.rbClears = 0; }
+function heatAdd(v) {
+  if (typeof run !== 'object' || !run || state !== 'playing') return;
+  if (run.heat === undefined) heatInit();
+  run.heat = clamp(run.heat + v, 0, 100);
+}
+const _heatNear = nearMiss;
+nearMiss = function (v, gap) { _heatNear(v, gap); heatAdd(gap < 0.35 ? 10 : 6); };
+const _heatLB = laneBusy;
+laneBusy = function (x, z, range) {
+  if (rb.active && rb.lanes.some(l => Math.abs(LANES[l] - x) < 2)) return true;
+  return _heatLB(x, z, range);
+};
+
+/* ---------- Control de carretera con pinchos ---------- */
+const rb = { active: false, z: -260, lanes: [], gap: 0, hit: false, cleared: false, root: null, parts: [] };
+function buildRB() {
+  const root = new THREE.Group(), white = std({ color: 0xe8ecf4, roughness: 0.6 }), red = std({ color: 0xe0203a, roughness: 0.6 });
+  const dark = std({ color: 0x1b1f2a, roughness: 0.8 }), spike = std({ color: 0x9aa3b5, roughness: 0.4, metalness: 0.7 });
+  for (let l = 0; l < 4; l++) {
+    const g = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.7, 0.55, 0.9), white); base.position.y = 0.55; g.add(base);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(3.7, 0.3, 0.9), dark); top.position.y = 1.0; g.add(top);
+    for (let i = -1; i <= 1; i++) { const s = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.57, 0.92), red); s.position.set(i * 1.15, 0.55, 0); g.add(s); }
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(3.7, 0.05, 1.6), dark); strip.position.set(0, 0.03, 1.2); g.add(strip);
+    for (let i = 0; i < 9; i++) { const sp = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 5), spike); sp.position.set(-1.6 + i * 0.4, 0.18, 1.2); g.add(sp); }
+    g.position.x = LANES[l]; root.add(g); rb.parts.push(g);
+  }
+  root.visible = false; scene.add(root); return root;
+}
+function startRB() {
+  if (!rb.root) rb.root = buildRB();
+  rb.gap = randInt(0, 3); rb.lanes = [0, 1, 2, 3].filter(l => l !== rb.gap);
+  Object.assign(rb, { active: true, z: -260, hit: false, cleared: false });
+  rb.parts.forEach((g, l) => { g.visible = l !== rb.gap; });
+  rb.root.visible = true; rb.root.position.set(0, 0, rb.z);
+  for (let i = traffic.length - 1; i >= 0; i--) {
+    const v = traffic[i];
+    if (!v.knock && v.z < -45 && rb.lanes.some(l => Math.abs(LANES[l] - v.x) < 2.2)) { releaseVehicle(v); traffic.splice(i, 1); }
+  }
+  toast('🚧 ROADBLOCK AHEAD', 'Take the green gap!', '#ff3b5c');
+  AudioSys.tone(900, 0.12, { type: 'square', vol: 0.07 }); AudioSys.tone(700, 0.12, { type: 'square', vol: 0.07, delay: 0.16 }); AudioSys.tone(900, 0.12, { type: 'square', vol: 0.07, delay: 0.32 });
+}
+function endRB() {
+  rb.active = false; if (rb.root) rb.root.visible = false;
+  if (typeof run === 'object' && run) run.nextRB = run.dist + rand(3200, 4800) * heatCd();
+}
+function updateHeat(dt, ws) {
+  updateCop2(dt);
+  const hudEl = heatEl.box;
+  if (state !== 'playing') { if (state !== 'paused') { if (rb.active) endRB(); heatEl.lv = 0; hudEl.className = state === 'countdown' ? 'on l1' : ''; if (state === 'countdown') { setText('heat-lv', 'HEAT 1'); setText('heat-x', '×1'); setStyle('heat-fill', 'width', '0%'); } } return; }
+  if (run.heat === undefined) heatInit();
+  const before = heatLv();
+  if (player.nitroOn) run.heat += 3 * dt;
+  if (player.speed > P.maxSpeed * 0.92) run.heat += 1.2 * dt;
+  if (run.combo <= 0) run.heat -= 2.2 * dt;
+  if (Zones.tunnel > 0.3) run.heat -= 9 * dt;
+  run.heat = clamp(run.heat, 0, 100); run.maxHeat = Math.max(run.maxHeat, run.heat);
+  const lv = heatLv();
+  if (lv > before && lv >= 2) {
+    toast(`🔥 HEAT ${lv} · ${HEAT.NAME[lv - 1]}`, HEAT.MSG[lv - 1], HEAT.COL[lv - 1]);
+    AudioSys.tone(300 + lv * 120, 0.18, { type: 'sawtooth', vol: 0.07, to: 200 + lv * 200 }); buzz(25);
+  }
+  // control de carretera
+  if (!rb.active) {
+    if (lv >= 4 && run.dist >= run.nextRB && !police.active && heli.phase === 'off' && Zones.tunnel < 0.05 && player.invuln <= 0 && run.time > 10) { if (Zones.list.some(Z => zz(Z.end) < 60 && zz(Z.start) > -520)) run.nextRB = run.dist + 120; else startRB(); }
+  } else {
+    rb.z += ws * dt; rb.root.position.z = rb.z;
+    if (!rb.hit && !rb.cleared && rb.z > -P_HL - 0.5 && rb.z < P_HL + 0.5) {
+      if (rb.lanes.some(l => Math.abs(player.x - LANES[l]) < 2.6)) {
+        rb.hit = true;
+        if (player.shield) {
+          player.shield = false; player.invuln = 1.2; AudioSys.sfx('shield'); flash('#00f0ff'); shake = Math.max(shake, 0.6);
+          toast('SHIELD BROKE THE ROADBLOCK', '', '#00f0ff');
+        } else if (player.invuln > 0) { /* inmune */ } else {
+          player.speed *= 0.45; player.nitroOn = false; player.nitro = 0; run.combo = 0; run.heat = Math.max(0, run.heat - 10);
+          flash('#ff3b5c'); shake = Math.max(shake, 0.9); buzz([60, 30, 120]); AudioSys.sfx('cone');
+          burst(player.x, 0.4, 0, 30, { color: [1, 0.85, 0.4], speed: 9, up: 6, life: 0.6, size: 0.4, spread: 0.6, grav: 12 });
+          toast('💥 SPIKE STRIP', 'Speed and nitro lost', '#ff3b5c');
+        }
+      }
+    }
+    if (!rb.hit && !rb.cleared && rb.z > P_HL + 1.5) {
+      rb.cleared = true; run.rbClears++; addScore(300);
+      toast('ROADBLOCK CLEARED', `+${fmt(300 * heatMul() * (player.x2 > 0 ? 2 : 1))}`, '#3dff8a'); AudioSys.sfx('mission'); buzz(25);
+    }
+    if (rb.z > 30) endRB();
+  }
+  // HUD
+  if (heatEl.lv !== lv) { heatEl.lv = lv; heatEl.box.className = 'on l' + lv; setText('heat-lv', `HEAT ${lv}`); setText('heat-x', '×' + String(HEAT.MUL[lv - 1])); }
+  setStyle('heat-fill', 'width', run.heat.toFixed(0) + '%');
+}
+function heatFx(t) {
+  cop2Fx(t);
+  if (!rb.active) return;
+  const z = rb.z, on = Math.sin(t * 14) > 0;
+  rb.lanes.forEach(l => {
+    const x = LANES[l];
+    glow.add(x - 1.2, 1.35, z, 1.6, on ? 1 : 0.1, 0.1, on ? 0.2 : 1, 0.95);
+    glow.add(x + 1.2, 1.35, z, 1.6, on ? 0.1 : 1, 0.1, on ? 1 : 0.2, 0.95);
+  });
+  const gx = LANES[rb.gap], k = 0.55 + 0.45 * Math.sin(t * 6);
+  for (let i = 0; i < 8; i++) glow.add(gx, 0.1, z + 3 + i * 4.5, 1.7, 0.2, 1, 0.45, 0.5 * k * (1 - i / 9));
+  for (let i = 0; i < 6; i++) glow.add(gx, 0.8 + i * 0.9, z, 1.5, 0.2, 1, 0.45, 0.6 * k);
+}
+const heatEl = { lv: 0, box: (() => {
+  const d = document.createElement('div'); d.id = 'heat';
+  d.innerHTML = '<div class="ht"><b id="heat-lv">HEAT 1</b><span id="heat-x">×1</span></div><div class="hb"><i id="heat-fill"></i></div>';
+  document.getElementById('hud').appendChild(d); return d; })() };
+
+/* ---------- Segundo coche de policía (Heat 4+) ---------- */
+let cop2 = null, cop2Bar = null, cop2x = 0;
+const _heatSC = startChase;
+startChase = function () {
+  _heatSC(); police.two = heatLv() >= 4;
+  if (police.two) { cop2x = player.x > 0 ? -3 : 3; toast('🚨🚨 2 POLICE UNITS', 'They close in faster — use NITRO!', '#ff3b5c'); }
+};
+function updateCop2(dt) {
+  const want = police.active && police.two && state !== 'menu';
+  if (!cop2) { if (!want) return; const keep = copBar; cop2 = buildCop(); cop2Bar = copBar; copBar = keep; }
+  if (!want) { cop2.root.visible = false; return; }
+  const side = police.x > 1.5 ? -1 : police.x < -1.5 ? 1 : (cop2x >= police.x ? 1 : -1);
+  cop2x = damp(cop2x, clamp(police.x + side * 2.7, -X_LIMIT, X_LIMIT), 2, dt);
+  const g2 = police.gap + 1.6;
+  cop2.root.visible = g2 < 34;
+  cop2.root.position.set(cop2x, 0, g2);
+  cop2.wheels.forEach(w => { w.spin.rotation.x -= player.speed * dt / (w.r || 0.36); });
+}
+function cop2Fx(t) {
+  if (!cop2 || !cop2.root.visible || !cop2Bar) return;
+  const ph = (t * 2.2 + 0.5) % 1, leftOn = ph < 0.5, dbl = Math.sin(t * 2.2 * Math.PI * 2 * 4) > 0;
+  const z = cop2.root.position.z + cop2Bar.z, x = cop2.root.position.x, y = cop2Bar.top;
+  cop2Bar.seg.forEach(s => {
+    const on = (s.left === leftOn) && dbl;
+    if (s.left) { s.mat.color.setRGB(on ? 3.2 : 0.22, on ? 0.12 : 0.02, on ? 0.15 : 0.03); glow.add(x + s.x, y, z, on ? 2.6 : 0.6, 1, 0.08, 0.1, on ? 1.2 : 0.15); }
+    else { s.mat.color.setRGB(on ? 0.15 : 0.02, on ? 0.35 : 0.05, on ? 3.6 : 0.3); glow.add(x + s.x, y, z, on ? 2.6 : 0.6, 0.15, 0.3, 1, on ? 1.3 : 0.15); }
+  });
 }
 
 /* =====================================================================
@@ -4583,7 +4742,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '759c59f7';
+window.NS_BUILD = '81f3f716';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
@@ -4612,6 +4771,6 @@ window.NeonSpeed = {
   get audio() { return { ready: AudioSys.ready, samples: AudioSys.buf ? Object.keys(AudioSys.buf) : [], music: Music.tracks ? Music.tracks.map(t => t.n + ':' + (t.el.paused ? 'paused' : 'playing') + ':' + t.vol.toFixed(2)) : null }; },
   get drawCalls() { return renderer.info.render.calls; },
   step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); },
-  get police() { return police; }, startChase, get heli() { return heli; }, startHeli, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
+  get police() { return police; }, startChase, get heli() { return heli; }, startHeli, get heatApi() { return { add: heatAdd, lv: heatLv, mul: heatMul, rb, startRB, get heat() { return run.heat; } }; }, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
 };
 })();

@@ -599,6 +599,18 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
 #menu.alt-b #menu-world,#menu.alt-b #menu-daily{font-size:11px;letter-spacing:.03em}
 #menu.alt-b .ab-col .btn .badge{position:static;transform:none;margin-left:2px}
 }
+
+/* v17 · HEAT */
+#heat{position:absolute;left:50%;top:calc(14px + var(--st));transform:translateX(-50%);width:min(44vw,230px);padding:7px 12px 9px;border-radius:14px;background:rgba(6,5,20,.72);border:1px solid rgba(127,246,255,.5);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);opacity:0;transition:opacity .3s,border-color .3s,box-shadow .3s;--hc:#7ff6ff}
+#heat.on{opacity:1}
+#heat .ht{display:flex;justify-content:space-between;align-items:baseline;font-family:'Orbitron';font-weight:900;font-size:12px;letter-spacing:.12em;color:var(--hc)}
+#heat .ht span{font-size:15px;color:#fff}
+#heat .hb{height:6px;margin-top:5px;border-radius:99px;background:rgba(255,255,255,.14);overflow:hidden}
+#heat .hb i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#7ff6ff,#ffd23f 35%,#ff4d2b 70%,#ff2bd6);background-size:230px 100%;transition:width .25s}
+#heat.l2{--hc:#ffd23f;border-color:#ffd23f}#heat.l3{--hc:#ff9a2b;border-color:#ff9a2b}
+#heat.l4{--hc:#ff4d2b;border-color:#ff4d2b;box-shadow:0 0 18px rgba(255,77,43,.5)}
+#heat.l5{--hc:#ff2bd6;border-color:#ff2bd6;box-shadow:0 0 24px rgba(255,43,214,.7);animation:v17pulse 1s ease-in-out infinite}
+@media (max-width:600px){#heat{top:calc(118px + var(--st));left:auto;right:14px;transform:none;width:150px}}
 </style>
 </head>
 <body>
@@ -942,15 +954,15 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=e37e7a8151'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=bae6694b83'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10274931;
-  fetch('game.js?v=e37e7a8151').then(function (r) {
+  var TOTAL = 10284623;
+  fetch('game.js?v=bae6694b83').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
