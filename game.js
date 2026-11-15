@@ -2692,7 +2692,7 @@ function refreshMenu() {
   if (IS_TOUCH) $('m-hint').innerHTML = 'Drag your finger to steer (or hold ◀ ▶) · NITRO to boost · BRAKE to slow down<br>Near misses build combos and refill your nitro.';
 }
 function goMenu() {
-  activeChallenge = null;
+  activeChallenge = null; activeDaily = null; pendingGhost = null;
   state = 'menu'; Music.intensity = 0;
   clearEntities(); clearZones(); resetPlayer(); ghostModel.root.visible = false;
   setPlayerModel(save.selected);
@@ -2706,9 +2706,11 @@ function startRun() {
   run.recordBefore = save.highScore;
   coachDismissed = false;
   P = perf(run.setup); P_HW = 0.95 * P.width; if (run.challenge) ghostPlay = null;
+  run.daily = activeDaily;
+  if (run.daily) { cycle = run.daily.cycle; ghostPlay = run.daily.ghost || null; } else if (pendingGhost && !run.challenge) ghostPlay = pendingGhost;
   setPlayerModel(run.setup.car, run.setup.tune);
   state = 'countdown'; countdown = 3;
-  zoneRng = Math.random; extendZones();
+  zoneRng = run.daily ? mulberry32(run.daily.seed) : Math.random; extendZones();
   prefillTraffic();
   Music.intensity = 1;
   camera.position.set(0, 6, 18);
@@ -2730,6 +2732,7 @@ function endRun() {
   if (run.saved) return;
   run.saved = true;
   state = 'gameover';
+  rankSubmit();
   const earned = run.coinsPicked * 2 + Math.floor(run.score / 25) + run.bonusCoins;
   const newRec = !run.challenge && run.score > save.highScore;
   save.coins += earned;
@@ -3023,8 +3026,11 @@ function downloadResultCard() {
 }
 
 const actions = {
-  play() { activeChallenge = null; startRun(); }, restart: startRun, menu: goMenu, back: goMenu,
+  play() { activeChallenge = null; activeDaily = null; pendingGhost = null; startRun(); }, restart: startRun, menu: goMenu, back: goMenu,
   friends: openFriends,
+  ranking() { state = 'missions'; rankTab = 'd'; openRanking(); show('ranking'); },
+  'rk-tab'(el) { rankTab = el.dataset.tab; renderRanking(); },
+  'rk-go'() { if (rankTab === 'd') startDaily(); else startGhostRace(); },
   'preview-challenge': previewChallenge,
   'accept-challenge': acceptChallenge,
   'close-friends'() { saveNickname(); $('friends-dialog').close(); },
@@ -4289,7 +4295,99 @@ function heliSoundStop(now) {
   } catch (e) {}
 }
 
-window.NS_BUILD = '8eb70d90';
+/* =====================================================================
+   v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
+   - Ranking: diario (reto), hoy, semana y siempre. Mejor marca por jugador.
+   - Reto diario: mismo coche de serie, mismas zonas/túneles y misma hora del día
+     para todos (semilla = día UTC). Los coches de tráfico siguen siendo aleatorios.
+   - Fantasmas: el del #1 del reto diario y el #1 de todos los tiempos.
+   ===================================================================== */
+let activeDaily = null, pendingGhost = null;
+const rankTop = {};                       // puntuación #1 conocida por modo (para decidir si subir el fantasma)
+let rankTab = 'd', rankBusy = 0;
+const RK_TABS = { d: ['daily', 'daily'], t: ['daily', 'free'], w: ['weekly', 'free'], a: ['all', 'free'] };
+const DAILY_CYCLES = [0.16, 0.3, 0.5, 0.6];
+function utcDay() { return new Date().toISOString().slice(0, 10); }
+function seedOf(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function dailyInfo(day) {
+  day = day || utcDay();
+  const s = seedOf('ns-' + day), car = CARS[s % CARS.length];
+  return { day, seed: s, car: car.id, carName: car.name, cycle: DAILY_CYCLES[(s >>> 3) % DAILY_CYCLES.length] };
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+function openRanking() { renderRanking(); }
+async function renderRanking() {
+  const mine = ++rankBusy, [scope, mode] = RK_TABS[rankTab], info = dailyInfo();
+  document.querySelectorAll('#ranking [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === rankTab));
+  const list = $('rk-list'), go = $('rk-go');
+  list.textContent = ''; $('rk-me').textContent = '';
+  $('rk-info').textContent = rankTab === 'd'
+    ? `Today's challenge: ${info.carName}, stock setup, same road conditions for everyone. Resets 00:00 UTC.`
+    : rankTab === 't' ? 'Best scores of free runs today (UTC).' : rankTab === 'w' ? 'Best scores of the last 7 days.' : 'All-time best scores.';
+  go.hidden = !(rankTab === 'd' || rankTab === 'a');
+  go.textContent = rankTab === 'd' ? 'PLAY DAILY CHALLENGE' : 'RACE THE #1 GHOST';
+  const msg = document.createElement('p'); msg.className = 'subnote'; msg.textContent = 'Loading…'; list.appendChild(msg);
+  try {
+    const r = await withTimeout(rpc('ns_leaderboard', { p_scope: scope, p_mode: mode, p_limit: 20, p_id: netIdentity().p_id }), 6000);
+    if (mine !== rankBusy) return;
+    list.textContent = '';
+    if (!r.rows.length) { const e = document.createElement('p'); e.className = 'subnote'; e.textContent = 'No scores yet. Be the first!'; list.appendChild(e); }
+    for (const row of r.rows) {
+      const el = document.createElement('div'); el.className = 'rk-row' + (row.me ? ' me' : '');
+      const car = CARS.find(c => c.id === row.car);
+      for (const [cls, txt] of [['rk-n', '#' + row.rank], ['rk-name', cleanNickname(row.name)], ['rk-car', car ? car.name : ''], ['rk-sc', fmt(row.score)]]) {
+        const s = document.createElement('span'); s.className = cls; s.textContent = txt; el.appendChild(s);
+      }
+      list.appendChild(el);
+    }
+    if (r.me) $('rk-me').textContent = `Your best: #${r.me.rank} · ${fmt(r.me.score)} pts`;
+    else if (r.rows.length) $('rk-me').textContent = 'You have no score here yet.';
+  } catch (e) {
+    if (mine !== rankBusy) return;
+    list.textContent = '';
+    const m = document.createElement('p'); m.className = 'subnote'; m.textContent = 'Could not load the ranking. Check your connection.'; list.appendChild(m);
+  }
+}
+async function startDaily() {
+  const info = dailyInfo(); let g = null;
+  $('rk-go').disabled = true;
+  try { g = await withTimeout(rpc('ns_get_ghost', { p_mode: 'daily' }), 3500); rankTop.daily = g ? g.score : 0; } catch (e) {}
+  $('rk-go').disabled = false;
+  activeChallenge = { v: 1, name: g ? g.name : 'DAILY', score: Math.max(1, g ? g.score : 2500), dist: 0, combo: 0, car: info.car, upgrades: { engine: 0, handling: 0, nitro: 0, magnet: 0 } };
+  activeDaily = { ...info, ghost: g ? g.d : null };
+  pendingGhost = null;
+  startRun();
+}
+async function startGhostRace() {
+  let g = null;
+  $('rk-go').disabled = true;
+  try { g = await withTimeout(rpc('ns_get_ghost', { p_mode: 'free' }), 3500); rankTop.free = g ? g.score : 0; } catch (e) {}
+  $('rk-go').disabled = false;
+  if (!g) { toast('NO GHOST YET', 'Set a score first and it will appear here', '#00f0ff'); return; }
+  activeChallenge = null; activeDaily = null; pendingGhost = g.d;
+  toast('👻 GHOST: ' + cleanNickname(g.name), fmt(g.score) + ' pts to beat', '#00f0ff');
+  startRun();
+}
+async function rankSubmit() {
+  if (run.challenge && !run.daily) return;              // retos de amigos: no puntúan
+  const score = Math.floor(run.score);
+  if (score < 300) return;
+  const mode = run.daily ? 'daily' : 'free';
+  let ghost = null;
+  if (ghostRec.length > 20 && (rankTop[mode] === undefined || score > rankTop[mode])) {
+    const s = JSON.stringify({ d: ghostRec });
+    if (s.length <= 85000) ghost = s;
+  }
+  try {
+    const r = await rpc('ns_submit_score', { ...netIdentity(), p_name: cleanNickname(save.nickname), p_score: score, p_dist: +run.dist.toFixed(1), p_car: run.setup.car, p_mode: mode, p_ghost: ghost });
+    if (ghost && r.rank_day === 1) rankTop[mode] = score;
+    if (r.improved) toast(run.daily ? `🏆 #${r.rank_day} IN THE DAILY` : `🏆 #${r.rank_day} TODAY · #${r.rank_all} ALL-TIME`, 'Score sent to the ranking', '#ffd23f');
+  } catch (e) { /* sin conexión o límite: se ignora, el juego sigue */ }
+}
+
+window.NS_BUILD = 'bf9cdd8a';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

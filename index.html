@@ -388,8 +388,8 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 #menu.alt-b .ab-stats b{font-family:'Orbitron';font-size:2.4cqh;color:#fff}
 #menu.alt-b .ab-stats b.yellow{color:#ffd23f}
 #menu.alt-b .ab-col{position:absolute;left:5.2%;top:28.6%;width:23%;height:58%;box-sizing:border-box;padding:2.5% 2.2%;display:flex;flex-direction:column;justify-content:space-evenly;background:#06050f;border:1px solid rgba(0,240,255,.5);border-radius:1.5cqh}
-#menu.alt-b .ab-col .btn{width:100%;margin:0;box-sizing:border-box;font-family:'Orbitron';font-size:2cqh;letter-spacing:.14em;text-transform:uppercase;border-radius:.8cqh;background:rgba(0,240,255,.05);border:1px solid #00f0ff;color:#bff9ff;box-shadow:inset 0 0 1.4cqh rgba(0,240,255,.25);height:6.4cqh;position:relative}
-#menu.alt-b .ab-col .btn.ab-play{height:12cqh;font-size:3.4cqh;font-style:italic;font-weight:900;color:#fff;background:linear-gradient(90deg,#ff2bd6,#ff4fa0);border:none;box-shadow:0 0 2.5cqh rgba(255,43,214,.7)}
+#menu.alt-b .ab-col .btn{width:100%;margin:0;box-sizing:border-box;font-family:'Orbitron';font-size:2cqh;letter-spacing:.14em;text-transform:uppercase;border-radius:.8cqh;background:rgba(0,240,255,.05);border:1px solid #00f0ff;color:#bff9ff;box-shadow:inset 0 0 1.4cqh rgba(0,240,255,.25);height:5.6cqh;position:relative}
+#menu.alt-b .ab-col .btn.ab-play{height:11cqh;font-size:3.4cqh;font-style:italic;font-weight:900;color:#fff;background:linear-gradient(90deg,#ff2bd6,#ff4fa0);border:none;box-shadow:0 0 2.5cqh rgba(255,43,214,.7)}
 #menu.alt-b .ab-col .btn .badge{position:absolute;right:1.5cqh;top:50%;transform:translateY(-50%)}
 #menu.alt-b .hint{position:absolute;left:50%;bottom:1.4%;transform:translateX(-50%);width:auto;max-width:70%;margin:0;padding:.5cqh 1.5cqh;border-radius:1cqh;background:rgba(6,5,18,.72);font-size:1.5cqh;color:#dfe6ff;opacity:1;text-align:center;box-sizing:border-box}
 #menu.alt-b .hint kbd{font-size:1.2cqh}
@@ -407,7 +407,22 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 #menu.alt-b .ab-col .btn{height:6.6cqh;font-size:1.6cqh;letter-spacing:.06em;padding:0 1cqw;line-height:1.2;white-space:normal}
 #menu.alt-b .ab-col .btn.ab-play{grid-column:1/-1;height:7.6cqh;font-size:3.2cqh}
 #menu.alt-b .hint{display:none}
+#menu.alt-b .ab-col .btn[data-action="profile"]{display:none}
 }
+
+/* RANKING */
+#ranking .rk{width:min(560px,94vw);max-height:92vh;display:flex;flex-direction:column;gap:10px}
+.rk-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.rk-tabs .btn{padding:10px 4px;font-size:12px;letter-spacing:.08em}
+.rk-tabs .btn.on{border-color:#00f0ff;color:#fff;background:rgba(0,240,255,.15);box-shadow:0 0 12px rgba(0,240,255,.35)}
+.rk-list{overflow-y:auto;min-height:120px;max-height:42vh;display:flex;flex-direction:column;gap:4px}
+.rk-row{display:grid;grid-template-columns:46px 1fr auto auto;gap:10px;align-items:center;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.05);font-size:13px}
+.rk-row.me{background:rgba(255,43,214,.18);border:1px solid rgba(255,43,214,.6)}
+.rk-n{font-family:'Orbitron';font-weight:900;color:#ffd23f}
+.rk-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.rk-car{color:#9aa6c8;font-size:11px}
+.rk-sc{font-family:'Orbitron';font-weight:700;color:#7ff6ff}
+@media (max-width:520px){.rk-car{display:none}.rk-row{grid-template-columns:40px 1fr auto}}
 </style>
 </head>
 <body>
@@ -435,6 +450,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
       <button class="btn ghost" data-action="profile">PROFILE</button>
       <button class="btn ghost" data-action="worlds">WORLDS · <span id="menu-world">NEON CITY</span></button>
       <button class="btn ghost" data-action="friends">FRIENDS</button>
+      <button class="btn ghost" data-action="ranking">RANKING</button>
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="settings">SETTINGS</button>
     </div>
@@ -474,6 +490,24 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     <div class="sheet-head"><h2>GARAGE</h2><span class="coins-pill">🪙 <span id="g-coins">0</span></span></div>
     <div class="tabs"><button class="tab on" data-action="tab-cars" id="tab-cars">CARS</button><button class="tab" data-action="tab-upg" id="tab-upg">UPGRADES</button><button class="tab" data-action="tab-tune" id="tab-tune">TUNING</button></div>
     <div class="list" id="g-list"></div>
+    <button class="btn ghost" data-action="back">BACK</button>
+  </div>
+</div>
+
+<!-- RANKING -->
+<div id="ranking" class="screen dim">
+  <div class="panel sheet rk">
+    <div class="sheet-head"><h2>RANKING</h2></div>
+    <div class="rk-tabs">
+      <button class="btn ghost on" data-action="rk-tab" data-tab="d">DAILY</button>
+      <button class="btn ghost" data-action="rk-tab" data-tab="t">TODAY</button>
+      <button class="btn ghost" data-action="rk-tab" data-tab="w">WEEK</button>
+      <button class="btn ghost" data-action="rk-tab" data-tab="a">ALL TIME</button>
+    </div>
+    <p class="subnote" id="rk-info"></p>
+    <div class="list rk-list" id="rk-list"></div>
+    <p class="subnote" id="rk-me"></p>
+    <button class="btn primary" id="rk-go" data-action="rk-go">PLAY DAILY CHALLENGE</button>
     <button class="btn ghost" data-action="back">BACK</button>
   </div>
 </div>
@@ -717,15 +751,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=7a269f2500'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=e52928e9a9'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 17186048;
-  fetch('game.js?v=7a269f2500').then(function (r) {
+  var TOTAL = 17192448;
+  fetch('game.js?v=e52928e9a9').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
