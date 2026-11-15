@@ -612,6 +612,14 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
 #heat.l5{--hc:#ff2bd6;border-color:#ff2bd6;box-shadow:0 0 24px rgba(255,43,214,.7);animation:v17pulse 1s ease-in-out infinite}
 @media (max-width:600px){#heat{top:calc(118px + var(--st));left:auto;right:14px;transform:none;width:150px}}
 @media (min-width:601px){#hud .hud-center{margin-top:46px}}
+
+/* v18 · misiones por mundo */
+.ms-head{font-family:'Orbitron';font-weight:900;font-size:12px;letter-spacing:.16em;color:#7ff6ff;margin:14px 2px 6px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.ms-head:first-child{margin-top:2px}
+.ms-head.world{color:#ff7ae6}
+.ms-head.world.here{color:#3dff8a}
+.ms-head span{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;letter-spacing:.04em;color:#9aa6c8;text-transform:none}
+.card.mission.locked{opacity:.45}
 </style>
 </head>
 <body>
@@ -955,15 +963,15 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=af78aba493'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=b03e320ffa'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10287695;
-  fetch('game.js?v=af78aba493').then(function (r) {
+  var TOTAL = 10292310;
+  fetch('game.js?v=b03e320ffa').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {

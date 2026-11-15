@@ -128,7 +128,30 @@ const MISSION_TPL = [
   { id: 'over',  mode: 'sum', key: 'overtakes',   goals: [30, 70, 140],      text: 'Overtake {n} cars' },
   { id: 'edge',  mode: 'run', key: 'runEdges',    goals: [2, 4, 7],          text: 'Get {n} on-the-edge near misses in one run' },
   { id: 'tunl',  mode: 'sum', key: 'tunnels',     goals: [2, 4, 8],          text: 'Drive through {n} tunnels' },
+  { id: 'heat',  mode: 'run', key: 'runHeat',     goals: [3, 4, 5],          text: 'Reach HEAT {n} in one run' },
+  { id: 'heli',  mode: 'sum', key: 'heliEvades',  goals: [1, 2, 4],          text: 'Evade {n} helicopters' },
+  { id: 'cops',  mode: 'sum', key: 'escapes',     goals: [1, 2, 4],          text: 'Escape the police {n} times' },
+  { id: 'block', mode: 'sum', key: 'rbClears',    goals: [1, 2, 3],          text: 'Clear {n} roadblocks' },
+  { id: 'kmh',   mode: 'run', key: 'runKmh',      goals: [210, 240, 265],    unit: ' km/h', text: 'Hit {n} km/h' },
+  { id: 'rain',  mode: 'sum', key: 'rainDist',    goals: [1, 2, 3],          unit: ' km', dec: 1, text: 'Drive {n} km in the rain' },
+  // World missions: only count while driving in that world
+  { id: 'n_tunl',  w: 'neon',  mode: 'sum', key: 'tunnels',     goals: [3, 5, 8],          text: 'Neon City: drive through {n} tunnels' },
+  { id: 'n_score', w: 'neon',  mode: 'run', key: 'runScore',    goals: [2500, 5000, 9000], text: 'Neon City: score {n} points in one run' },
+  { id: 'n_over',  w: 'neon',  mode: 'sum', key: 'overtakes',   goals: [40, 80, 150],      text: 'Neon City: overtake {n} cars' },
+  { id: 'n_near',  w: 'neon',  mode: 'run', key: 'runNear',     goals: [8, 14, 22],        text: 'Neon City: {n} near misses in one run' },
+  { id: 'n_dist',  w: 'neon',  mode: 'run', key: 'runDist',     goals: [3, 4, 6],          unit: ' km', dec: 1, text: 'Neon City: drive {n} km in one run' },
+  { id: 't_rain',  w: 'tokyo', mode: 'sum', key: 'rainDist',    goals: [1, 2, 4],          unit: ' km', dec: 1, text: 'Tokyo: drive {n} km in the rain' },
+  { id: 't_night', w: 'tokyo', mode: 'sum', key: 'nightDist',   goals: [2, 3, 5],          unit: ' km', dec: 1, text: 'Tokyo: drive {n} km at night' },
+  { id: 't_combo', w: 'tokyo', mode: 'run', key: 'runCombo',    goals: [4, 6, 9],          text: 'Tokyo: reach a ×{n} combo' },
+  { id: 't_heli',  w: 'tokyo', mode: 'sum', key: 'heliEvades',  goals: [1, 2, 3],          text: 'Tokyo: evade {n} helicopters' },
+  { id: 't_edge',  w: 'tokyo', mode: 'run', key: 'runEdges',    goals: [3, 5, 8],          text: 'Tokyo: {n} on-the-edge near misses in one run' },
+  { id: 'm_coins', w: 'miami', mode: 'sum', key: 'coinsPicked', goals: [50, 90, 150],      text: 'Miami Beach: collect {n} coins' },
+  { id: 'm_heat',  w: 'miami', mode: 'run', key: 'runHeat',     goals: [3, 4, 5],          text: 'Miami Beach: reach HEAT {n}' },
+  { id: 'm_cops',  w: 'miami', mode: 'sum', key: 'escapes',     goals: [1, 2, 3],          text: 'Miami Beach: escape the police {n} times' },
+  { id: 'm_nitro', w: 'miami', mode: 'sum', key: 'nitroUses',   goals: [8, 15, 25],        text: 'Miami Beach: fire the nitro {n} times' },
+  { id: 'm_kmh',   w: 'miami', mode: 'run', key: 'runKmh',      goals: [220, 250, 270],    unit: ' km/h', text: 'Miami Beach: hit {n} km/h' },
 ];
+const MISSION_WORLDS = ['neon', 'tokyo', 'miami'], MISSION_V = 2, DAILY_N = 5, WORLD_N = 2;
 const MISSION_REWARD = [120, 250, 400];
 
 /* =====================================================================
@@ -180,20 +203,24 @@ function todayKey() { const d = new Date(); return d.getFullYear() + '-' + (d.ge
 function seeded(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 function ensureMissions() {
   const key = todayKey();
-  if (save.missions && save.missions.date === key) return;
+  if (save.missions && save.missions.date === key && save.missions.v === MISSION_V) return;
   let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) | 0;
   const r = seeded(h);
-  const pool = MISSION_TPL.slice(), list = [];
-  while (list.length < 3) {
+  const list = [];
+  const draw = (pool, n) => { for (let k = 0; k < n && pool.length; k++) {
     const t = pool.splice(Math.floor(r() * pool.length), 1)[0];
     list.push({ tid: t.id, tier: Math.min(2, Math.floor(r() * 3)), progress: 0, claimed: false });
-  }
-  save.missions = { date: key, list };
+  } };
+  draw(MISSION_TPL.filter(t => !t.w), DAILY_N);
+  MISSION_WORLDS.forEach(w => draw(MISSION_TPL.filter(t => t.w === w), WORLD_N));
+  save.missions = { date: key, v: MISSION_V, list };
   persist();
 }
 const tplOf = m => MISSION_TPL.find(t => t.id === m.tid);
 const missionGoal = m => tplOf(m).goals[m.tier];
-const missionText = m => tplOf(m).text.replace('{n}', fmt(missionGoal(m)));
+const missionText = m => tplOf(m).text.replace('{n}', fmt(missionGoal(m))).replace(' 1 times', ' once').replace(/ 1 (helicopter|roadblock)s/, ' 1 $1');
+const missionReward = m => Math.round(MISSION_REWARD[m.tier] * (tplOf(m).w ? 1.5 : 1));
+const missionActive = m => { const w = tplOf(m).w; return !w || (typeof WORLD === 'object' && WORLD.id === w); };
 const claimableCount = () => { ensureMissions(); return save.missions.list.filter(m => !m.claimed && m.progress >= missionGoal(m)).length; };
 
 function perf(setup = null) {
@@ -2468,13 +2495,15 @@ function updatePlayer(dt) {
 }
 function runValues() {
   return { runDist: run.dist / 1000, runNear: run.nearMisses, runScore: run.score, runCombo: run.bestCombo, coinsPicked: run.coinsPicked,
-    nitroUses: run.nitroUses, nightDist: run.nightDist / 1000, powerups: run.powerups, overtakes: run.overtakes, runEdges: run.edges, tunnels: run.tunnels };
+    nitroUses: run.nitroUses, nightDist: run.nightDist / 1000, powerups: run.powerups, overtakes: run.overtakes, runEdges: run.edges, tunnels: run.tunnels,
+    runHeat: run.maxHeat === undefined ? 1 : Math.min(5, Math.floor(run.maxHeat / 20) + 1), heliEvades: run.heliEvades || 0, escapes: run.escapes || 0,
+    rbClears: run.rbClears || 0, runKmh: Math.round(run.maxKmh || 0), rainDist: (run.rainDist || 0) / 1000 };
 }
 function checkMissionsLive() {
   ensureMissions();
   const vals = runValues();
   save.missions.list.forEach((m, i) => {
-    if (m.claimed || m.progress >= missionGoal(m) || missionNotified.has(i)) return;
+    if (m.claimed || m.progress >= missionGoal(m) || missionNotified.has(i) || !missionActive(m)) return;
     const t = tplOf(m), proj = t.mode === 'run' ? Math.max(m.progress, vals[t.key]) : m.progress + vals[t.key];
     if (proj >= missionGoal(m)) { missionNotified.add(i); toast('MISSION COMPLETE', missionText(m), '#3dff8a'); AudioSys.sfx('mission'); }
   });
@@ -2753,7 +2782,7 @@ function endRun() {
   ensureMissions();
   const vals = runValues(), done = [];
   save.missions.list.forEach(m => {
-    if (m.claimed) return;
+    if (m.claimed || !missionActive(m)) return;
     const t = tplOf(m), before = m.progress >= missionGoal(m);
     m.progress = t.mode === 'run' ? Math.max(m.progress, vals[t.key]) : m.progress + vals[t.key];
     if (!before && m.progress >= missionGoal(m)) done.push(missionText(m));
@@ -2822,15 +2851,25 @@ function renderGarage() {
 function renderMissions() {
   ensureMissions();
   $('ms-coins').textContent = fmt(save.coins);
-  $('ms-list').innerHTML = save.missions.list.map((m, i) => {
-    const t = tplOf(m), goal = missionGoal(m), done = m.progress >= goal, pct = clamp(m.progress / goal, 0, 1) * 100;
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const card = (m, i, locked) => {
+    const t = tplOf(m), goal = missionGoal(m), done = m.progress >= goal, pct = clamp(m.progress / goal, 0, 1) * 100, rw = missionReward(m);
     const pv = t.dec ? Math.min(m.progress, goal).toFixed(t.dec) : fmt(Math.min(m.progress, goal));
     const btn = m.claimed ? '<button class="btn sm ghost" disabled>CLAIMED</button>'
-      : done ? `<button class="btn sm gold" data-action="claim" data-i="${i}">🪙 ${MISSION_REWARD[m.tier]}</button>`
-      : `<button class="btn sm ghost" disabled>🪙 ${MISSION_REWARD[m.tier]}</button>`;
-    return `<div class="card mission ${done ? 'done' : ''}" style="cursor:default"><div class="info"><div class="name">${missionText(m)}</div>
+      : done ? `<button class="btn sm gold" data-action="claim" data-i="${i}">🪙 ${rw}</button>`
+      : `<button class="btn sm ghost" disabled>🪙 ${rw}</button>`;
+    return `<div class="card mission ${done ? 'done' : ''} ${locked ? 'locked' : ''}" style="cursor:default"><div class="info"><div class="name">${(t.w ? cap(missionText(m).replace(/^[^:]+: /, '')) : missionText(m))}</div>
       <div class="prog"><i style="width:${pct}%"></i></div><div class="ptxt">${pv}${t.unit || ''} / ${fmt(goal)}${t.unit || ''}</div></div>${btn}</div>`;
-  }).join('');
+  };
+  const L = save.missions.list.map((m, i) => ({ m, i, w: tplOf(m).w }));
+  let html = '<div class="ms-head">DAILY MISSIONS</div>' + L.filter(x => !x.w).map(x => card(x.m, x.i)).join('');
+  MISSION_WORLDS.forEach(w => {
+    const W = typeof worldById === 'function' ? worldById(w) : { name: w.toUpperCase() };
+    const ok = typeof worldUnlocked === 'function' ? worldUnlocked(W) : true, here = typeof WORLD === 'object' && WORLD.id === w;
+    html += `<div class="ms-head world ${here ? 'here' : ''}">${W.name}<span>${!ok ? '🔒 unlock this world' : here ? 'you are here · +50% coins' : 'drive here to progress · +50% coins'}</span></div>`
+      + L.filter(x => x.w === w).map(x => card(x.m, x.i, !ok)).join('');
+  });
+  $('ms-list').innerHTML = html;
   const now = new Date(), mid = new Date(now); mid.setHours(24, 0, 0, 0);
   const mins = Math.round((mid - now) / 60000);
   $('ms-reset').textContent = `New missions in ${Math.floor(mins / 60)}h ${mins % 60}m`;
@@ -2937,7 +2976,7 @@ function nextUnlockText() {
 function claimResultRewards() {
   ensureMissions(); let reward = 0;
   save.missions.list.forEach(m => {
-    if (!m.claimed && m.progress >= missionGoal(m)) { m.claimed = true; reward += MISSION_REWARD[m.tier]; }
+    if (!m.claimed && m.progress >= missionGoal(m)) { m.claimed = true; reward += missionReward(m); }
   });
   if (reward) { save.coins += reward; persist(); AudioSys.sfx('mission'); }
   $('go-claim').hidden = true;
@@ -3109,7 +3148,7 @@ const actions = {
   claim(el) {
     const m = save.missions.list[+el.dataset.i];
     if (!m || m.claimed || m.progress < missionGoal(m)) return;
-    m.claimed = true; save.coins += MISSION_REWARD[m.tier]; persist(); AudioSys.sfx('mission'); renderMissions();
+    m.claimed = true; save.coins += missionReward(m); persist(); AudioSys.sfx('mission'); renderMissions();
   },
   'toggle-music'() { save.settings.music = !save.settings.music; persist(); AudioSys.apply(); renderSettings(); },
   'toggle-sfx'() { save.settings.sfx = !save.settings.sfx; persist(); AudioSys.apply(); renderSettings(); },
@@ -4279,7 +4318,7 @@ function updateHeli(dt) {
       if (heli.t <= 0) {
         if (heli.hit || heli.blocked) { heliLeave(true); }
         else if (heli.shots < 2) { heli.phase = 'track'; heli.t = C.RETRACK; heli.mx = player.x; toast('DODGED!', 'It is aiming again…', '#3dff8a'); AudioSys.sfx('mission'); }
-        else { heliLeave(false); addScore(C.EVADE_PTS); toast('HELICOPTER EVADED!', `+${fmt(C.EVADE_PTS * (player.x2 > 0 ? 2 : 1))}`, '#3dff8a'); AudioSys.sfx('mission'); }
+        else { heliLeave(false); run.heliEvades = (run.heliEvades || 0) + 1; addScore(C.EVADE_PTS); toast('HELICOPTER EVADED!', `+${fmt(C.EVADE_PTS * (player.x2 > 0 ? 2 : 1))}`, '#3dff8a'); AudioSys.sfx('mission'); }
       }
       break;
     case 'leave':
@@ -4782,7 +4821,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = 'e0361eb3';
+window.NS_BUILD = '8022b8be';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
