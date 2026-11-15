@@ -375,6 +375,8 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 #bet-dialog .bet-hero{font:900 13px 'Orbitron';letter-spacing:.14em;color:var(--pink)}
 #bet-link{min-height:70px}
 .go-btns .btn.bet{background:linear-gradient(90deg,#ffd23f,#ff7a2f);color:#1a0d00}
+
+.credits{margin-top:10px;font-size:11px;color:#c8cde8;opacity:.55;text-align:center;letter-spacing:.04em}
 </style>
 </head>
 <body>
@@ -407,6 +409,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     </div>
   </div>
   <p class="hint" id="m-hint"><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> steer · <kbd>SHIFT</kbd> nitro · <kbd>S</kbd> / <kbd>↓</kbd> brake · <kbd>P</kbd> pause<br>Near misses build combos and refill your nitro.</p>
+  <p class="credits">Modelos 3D: Polyfork (polyfork.dev) · CC BY 4.0</p>
 </div>
 
 <!-- PROFILE (menu) -->
@@ -683,15 +686,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=597bd79d92'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=c6fa2f3a9b'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 13799541;
-  fetch('game.js?v=597bd79d92').then(function (r) {
+  var TOTAL = 15980307;
+  fetch('game.js?v=c6fa2f3a9b').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
