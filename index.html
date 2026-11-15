@@ -440,6 +440,14 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .fr-row .btn{grid-area:x;padding:4px 10px}
 .fr-input{background:#030819;color:#fff;border:1px solid #36546d;border-radius:10px;padding:11px 12px;font-size:15px}
 .fr-input::placeholder{color:#5f7188}
+
+/* botón WORLDS: el nombre del mundo va en una segunda línea y nunca desborda */
+#menu.alt-b .ab-col .btn{white-space:normal;overflow:hidden;line-height:1.15;padding-left:1cqh;padding-right:1cqh;text-align:center}
+#menu.alt-b .ab-col .btn[data-action="worlds"]{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.25cqh}
+#menu.alt-b #menu-world{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.15cqh;letter-spacing:.1em;color:#ff7ad9}
+#menu.alt-b .ab-col .btn[data-action="worlds"]{font-size:1.7cqh;line-height:1;gap:.2cqh;padding-top:0;padding-bottom:0}
+#menu.alt-b #menu-world{font-size:1.1cqh;letter-spacing:.06em;line-height:1.1}
+@media (max-aspect-ratio:1/1){#menu.alt-b .ab-col .btn[data-action="worlds"]{font-size:1.5cqh}#menu.alt-b #menu-world{font-size:1cqh;letter-spacing:.03em}}
 </style>
 </head>
 <body>
@@ -465,7 +473,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
       <button class="btn primary big ab-play" data-action="play">PLAY</button>
       <button class="btn ghost" data-action="garage">GARAGE</button>
       <button class="btn ghost" data-action="profile">PROFILE</button>
-      <button class="btn ghost" data-action="worlds">WORLDS · <span id="menu-world">NEON CITY</span></button>
+      <button class="btn ghost" data-action="worlds">WORLDS<span id="menu-world">NEON CITY</span></button>
       <button class="btn ghost" data-action="friends">FRIENDS</button>
       <button class="btn ghost" data-action="ranking">RANKING</button>
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
