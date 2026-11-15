@@ -377,6 +377,24 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .go-btns .btn.bet{background:linear-gradient(90deg,#ffd23f,#ff7a2f);color:#1a0d00}
 
 .credits{margin-top:10px;font-size:11px;color:#c8cde8;opacity:.55;text-align:center;letter-spacing:.04em}
+
+/* MENÚ ALT B · Tokyo Tuning (imagen Magnific como fondo; controles reales encima) */
+#menu.alt-b{background:#02010a;justify-content:center}
+#menu.alt-b .ab-stage{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw,calc(100vh*16/9));aspect-ratio:16/9;container-type:size;overflow:hidden}
+#menu.alt-b .ab-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;user-select:none;pointer-events:none}
+#menu.alt-b .ab-stats{position:absolute;left:76.2%;top:3.6%;width:21.4%;height:19.4%;display:flex;flex-direction:column;justify-content:space-evenly;padding:0 3%;box-sizing:border-box;background:#06050f;border:1px solid rgba(0,240,255,.6);border-radius:1.2cqh;box-shadow:0 0 2cqh rgba(0,240,255,.25)}
+#menu.alt-b .ab-stats .s{display:flex;justify-content:space-between;align-items:center}
+#menu.alt-b .ab-stats label{font-size:1.5cqh;letter-spacing:.14em;color:#7ff6ff;font-weight:700}
+#menu.alt-b .ab-stats b{font-family:'Orbitron';font-size:2.4cqh;color:#fff}
+#menu.alt-b .ab-stats b.yellow{color:#ffd23f}
+#menu.alt-b .ab-col{position:absolute;left:5.2%;top:28.6%;width:23%;height:58%;box-sizing:border-box;padding:2.5% 2.2%;display:flex;flex-direction:column;justify-content:space-evenly;background:#06050f;border:1px solid rgba(0,240,255,.5);border-radius:1.5cqh}
+#menu.alt-b .ab-col .btn{width:100%;margin:0;box-sizing:border-box;font-family:'Orbitron';font-size:2cqh;letter-spacing:.14em;text-transform:uppercase;border-radius:.8cqh;background:rgba(0,240,255,.05);border:1px solid #00f0ff;color:#bff9ff;box-shadow:inset 0 0 1.4cqh rgba(0,240,255,.25);height:6.4cqh;position:relative}
+#menu.alt-b .ab-col .btn.ab-play{height:12cqh;font-size:3.4cqh;font-style:italic;font-weight:900;color:#fff;background:linear-gradient(90deg,#ff2bd6,#ff4fa0);border:none;box-shadow:0 0 2.5cqh rgba(255,43,214,.7)}
+#menu.alt-b .ab-col .btn .badge{position:absolute;right:1.5cqh;top:50%;transform:translateY(-50%)}
+#menu.alt-b .hint{position:absolute;left:50%;bottom:1.4%;transform:translateX(-50%);width:auto;max-width:70%;margin:0;padding:.5cqh 1.5cqh;border-radius:1cqh;background:rgba(6,5,18,.72);font-size:1.5cqh;color:#dfe6ff;opacity:1;text-align:center;box-sizing:border-box}
+#menu.alt-b .hint kbd{font-size:1.2cqh}
+#menu.alt-b .credits{position:absolute;left:8px;bottom:6px;margin:0;font-size:11px;color:#c8cde8;opacity:.6}
+@media (max-aspect-ratio:1/1){#menu.alt-b .ab-col .btn{font-size:1.9cqh}#menu.alt-b .ab-stats label{font-size:1.2cqh}}
 </style>
 </head>
 <body>
@@ -388,18 +406,17 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 <div id="flash"></div>
 
 <!-- MENU -->
-<div id="menu" class="screen">
-  <h1 class="title logo-title"><img id="logo-img" alt="NEON SPEED"></h1>
-  <div class="panel menu-stats">
-    <div class="s"><label>HIGH SCORE</label><b id="m-high">0</b></div>
-    <div class="sep"></div>
-    <div class="s"><label>BEST DISTANCE</label><b id="m-dist">0.0 km</b></div>
-    <div class="sep"></div>
-    <div class="s"><label>COINS</label><b id="m-coins" class="yellow">0</b></div>
-  </div>
-  <div class="menu-btns">
-    <button class="btn primary big" data-action="play">PLAY</button>
-    <div class="row">
+<div id="menu" class="screen alt-b">
+  <div class="ab-stage">
+    <img class="ab-bg" src="menu-bg.webp" alt="">
+    <h1 class="title logo-title" style="display:none"><img id="logo-img" alt="NEON SPEED"></h1>
+    <div class="ab-stats">
+      <div class="s"><label>HIGH SCORE</label><b id="m-high">0</b></div>
+      <div class="s"><label>BEST DISTANCE</label><b id="m-dist">0.0 km</b></div>
+      <div class="s"><label>COINS</label><b id="m-coins" class="yellow">0</b></div>
+    </div>
+    <div class="ab-col">
+      <button class="btn primary big ab-play" data-action="play">PLAY</button>
       <button class="btn ghost" data-action="garage">GARAGE</button>
       <button class="btn ghost" data-action="profile">PROFILE</button>
       <button class="btn ghost" data-action="worlds">WORLDS · <span id="menu-world">NEON CITY</span></button>
@@ -407,8 +424,8 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="settings">SETTINGS</button>
     </div>
+    <p class="hint" id="m-hint"><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> steer · <kbd>SHIFT</kbd> nitro · <kbd>S</kbd> / <kbd>↓</kbd> brake · <kbd>P</kbd> pause<br>Near misses build combos and refill your nitro.</p>
   </div>
-  <p class="hint" id="m-hint"><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> steer · <kbd>SHIFT</kbd> nitro · <kbd>S</kbd> / <kbd>↓</kbd> brake · <kbd>P</kbd> pause<br>Near misses build combos and refill your nitro.</p>
   <p class="credits">Modelos 3D: Polyfork (polyfork.dev) · CC BY 4.0</p>
 </div>
 
