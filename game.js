@@ -133,6 +133,7 @@ const MISSION_TPL = [
   { id: 'cops',  mode: 'sum', key: 'escapes',     goals: [1, 2, 4],          text: 'Escape the police {n} times' },
   { id: 'block', mode: 'sum', key: 'rbClears',    goals: [1, 2, 3],          text: 'Clear {n} roadblocks' },
   { id: 'kmh',   mode: 'run', key: 'runKmh',      goals: [210, 240, 265],    unit: ' km/h', text: 'Hit {n} km/h' },
+  { id: 'risk',  mode: 'sum', key: 'riskForks',   goals: [1, 3, 5],          text: 'Take the risky side of {n} forks' },
   { id: 'rain',  mode: 'sum', key: 'rainDist',    goals: [1, 2, 3],          unit: ' km', dec: 1, text: 'Drive {n} km in the rain' },
   // World missions: only count while driving in that world
   { id: 'n_tunl',  w: 'neon',  mode: 'sum', key: 'tunnels',     goals: [3, 5, 8],          text: 'Neon City: drive through {n} tunnels' },
@@ -218,7 +219,7 @@ function ensureMissions() {
 }
 const tplOf = m => MISSION_TPL.find(t => t.id === m.tid);
 const missionGoal = m => tplOf(m).goals[m.tier];
-const missionText = m => tplOf(m).text.replace('{n}', fmt(missionGoal(m))).replace(' 1 times', ' once').replace(/ 1 (helicopter|roadblock)s/, ' 1 $1');
+const missionText = m => tplOf(m).text.replace('{n}', fmt(missionGoal(m))).replace(' 1 times', ' once').replace(/ 1 (helicopter|roadblock|fork)s/, ' 1 $1');
 const missionReward = m => Math.round(MISSION_REWARD[m.tier] * (tplOf(m).w ? 1.5 : 1));
 const missionActive = m => { const w = tplOf(m).w; return !w || (typeof WORLD === 'object' && WORLD.id === w); };
 const claimableCount = () => { ensureMissions(); return save.missions.list.filter(m => !m.claimed && m.progress >= missionGoal(m)).length; };
@@ -2497,7 +2498,7 @@ function runValues() {
   return { runDist: run.dist / 1000, runNear: run.nearMisses, runScore: run.score, runCombo: run.bestCombo, coinsPicked: run.coinsPicked,
     nitroUses: run.nitroUses, nightDist: run.nightDist / 1000, powerups: run.powerups, overtakes: run.overtakes, runEdges: run.edges, tunnels: run.tunnels,
     runHeat: run.maxHeat === undefined ? 1 : Math.min(5, Math.floor(run.maxHeat / 20) + 1), heliEvades: run.heliEvades || 0, escapes: run.escapes || 0,
-    rbClears: run.rbClears || 0, runKmh: Math.round(run.maxKmh || 0), rainDist: (run.rainDist || 0) / 1000 };
+    rbClears: run.rbClears || 0, riskForks: run.riskForks || 0, runKmh: Math.round(run.maxKmh || 0), rainDist: (run.rainDist || 0) / 1000 };
 }
 function checkMissionsLive() {
   ensureMissions();
@@ -2577,7 +2578,7 @@ function updateGlows(t) {
   }
   coins.forEach(c => { if (c.z > -220) glow.add(c.x, c.y, c.z, 2.4, 1, 0.75, 0.2, 0.18 + 0.5 * n); });
   powerups.forEach(p => { const c = PU_TYPES[p.type].rgb; glow.add(p.x, p.mesh.position.y, p.z, 5, c[0], c[1], c[2], 0.9); });
-  policeFx(t); heliFx(t); heatFx(t); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
+  policeFx(t); heliFx(t); heatFx(t); forkFx(t); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
   if (ghostModel.root.visible) glow.add(ghostModel.root.position.x, 0.8, ghostModel.root.position.z, 4, 0, 0.9, 1, 0.35);
 }
 function updateGhost() {
@@ -3286,7 +3287,7 @@ function update(realDt) {
   Music.update(realDt, Weather.rain);
   Refl.begin();
   updateTraffic(dt, ws);
-  updatePolice(dt); updateHeli(dt); updateHeat(dt, ws);
+  updatePolice(dt); updateHeli(dt); updateHeat(dt, ws); updateFork(dt);
   updatePickups(dt, ws, simTime);
   updatePlayerVisual(dt, ws);
   updateGhost();
@@ -4555,6 +4556,187 @@ function cop2Fx(t) {
 }
 
 /* =====================================================================
+   v19: BIFURCACIONES
+   La autopista se divide en dos calzadas separadas por una mediana. Un pórtico
+   avisa antes qué hay en cada lado; hay que elegir antes del morro de la mediana.
+   · Riesgo: río de monedas, puntos ×2, tráfico denso, Heat ↑
+   · Segura: casi sin tráfico, Heat ↓
+   · Con la policía detrás: SALIDA (te los quitas, tráfico denso) o PRINCIPAL (monedas, siguen detrás)
+   Se coloca en los huecos entre túneles, puentes y obras para no solaparse.
+   ===================================================================== */
+const FORK = { DIV_HW: 0.45, SIGN_AHEAD: 90, L_MIN: 220, L_MAX: 360 };
+const fork = { active: false, mul: 1, gore: 0, end: 0, side: 0, rich: 0, busy: 0, type: 'risk', root: null };
+function forkSlot() {
+  const Zs = Zones.list.slice().sort((a, b) => a.start - b.start);
+  let prevEnd = -1e9;
+  for (const Z of Zs) {
+    const g0 = Math.max(prevEnd + 100, worldDist + 420), g1 = Z.start - 40, L = Math.min(FORK.L_MAX, g1 - g0);
+    if (L >= FORK.L_MIN) return { gore: g0, L };
+    prevEnd = Math.max(prevEnd, Z.end);
+  }
+  return null;
+}
+function forkPanel(c, tx, color, title, sub, dir) {
+  const x = c.getContext('2d'), w = c.width, h = c.height;
+  x.clearRect(0, 0, w, h);
+  x.fillStyle = '#071018'; x.fillRect(0, 0, w, h);
+  x.strokeStyle = color; x.lineWidth = 14; x.strokeRect(10, 10, w - 20, h - 20);
+  x.save(); x.translate(dir < 0 ? 130 : w - 130, h / 2); x.rotate(dir < 0 ? -Math.PI / 4 : Math.PI / 4);
+  x.fillStyle = color; x.beginPath(); x.moveTo(0, -95); x.lineTo(62, -25); x.lineTo(22, -25); x.lineTo(22, 85); x.lineTo(-22, 85); x.lineTo(-22, -25); x.lineTo(-62, -25); x.closePath(); x.fill(); x.restore();
+  x.textAlign = dir < 0 ? 'left' : 'right'; const tx0 = dir < 0 ? 240 : w - 240;
+  x.fillStyle = color; x.font = "italic 900 104px Orbitron, Arial, sans-serif"; x.fillText(title, tx0, 158, 700);
+  x.fillStyle = '#eaf6ff'; x.font = "700 50px Orbitron, Arial, sans-serif"; x.fillText(sub, tx0, 246, 730);
+  tx.needsUpdate = true;
+}
+function buildFork() {
+  const root = new THREE.Group();
+  const conc = std({ color: col(0xb9bec8), roughness: 0.8 });
+  const div = new THREE.Mesh(new THREE.BoxGeometry(FORK.DIV_HW * 2, 1.0, 1, 1, 1, 120), conc); div.position.y = 0.5; div.frustumCulled = false;
+  const neonMat = basic({ color: new THREE.Color(0.2, 2.2, 2.4) });
+  const neon = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 1, 1, 1, 120), neonMat); neon.position.y = 1.04; neon.frustumCulled = false;
+  const chev = canvasTex(256, 256, (x, w, h) => { x.fillStyle = '#ffd21a'; x.fillRect(0, 0, w, h); x.fillStyle = '#111'; for (let i = -2; i < 6; i++) { x.beginPath(); x.moveTo(i * 64, 0); x.lineTo(i * 64 + 32, 0); x.lineTo(i * 64 + 32 + 128, h); x.lineTo(i * 64 + 128, h); x.closePath(); x.fill(); } });
+  const gore = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.15, 2.6), std({ map: chev, roughness: 0.6 })); gore.position.y = 0.58;
+  const post = std({ color: col(0x3a404c), roughness: 0.6, metalness: 0.5 });
+  const gantry = new THREE.Group();
+  [-9.8, 9.8].forEach(x => { const p = new THREE.Mesh(new THREE.BoxGeometry(0.4, 8.4, 0.4), post); p.position.set(x, 4.2, 0); gantry.add(p); });
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(20, 0.5, 0.5), post); beam.position.set(0, 7.9, 0); gantry.add(beam);
+  const panels = [-1, 1].map(s => {
+    const c = document.createElement('canvas'); c.width = 1024; c.height = 320;
+    const t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = 8;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 2.6), basic({ map: t, color: new THREE.Color(1.25, 1.25, 1.25) }));
+    m.position.set(s * 4.7, 6.2, 0.3); gantry.add(m); return { c, t, s };
+  });
+  root.add(div, neon, gore, gantry); root.visible = false; scene.add(root);
+  return { root, div, neon, gore, gantry, panels };
+}
+function startFork(slot) {
+  if (!fork.root) fork.parts = buildFork(), fork.root = fork.parts.root;
+  const esc = police.active, s = Math.random() < 0.5 ? -1 : 1;
+  Object.assign(fork, { active: true, mul: 1, gore: slot.gore, end: slot.gore + slot.L, L: slot.L, side: 0, type: esc ? 'escape' : 'risk',
+    rich: esc ? -s : s, busy: s, nextCoin: slot.gore + 18, nextCar: slot.gore + 30, s0: 0, c0: 0, wall: 0 });
+  // busy = lado con tráfico denso (riesgo / salida); rich = lado con monedas
+  const P = fork.parts;
+  P.panels.forEach(p => {
+    let color, title, sub;
+    if (fork.type === 'risk') {
+      if (p.s === fork.busy) { color = '#ffd23f'; title = 'RISK'; sub = 'COINS · ×2 · HEAT ▲'; }
+      else { color = '#3dff8a'; title = 'SAFE'; sub = 'CLEAR ROAD · HEAT ▼'; }
+    } else {
+      if (p.s === fork.busy) { color = '#36e7ff'; title = 'EXIT'; sub = 'LOSE THE COPS'; }
+      else { color = '#ffd23f'; title = 'MAIN'; sub = 'COINS · COPS STAY'; }
+    }
+    forkPanel(p.c, p.t, color, title, sub, p.s);
+  });
+  P.root.visible = true;
+  const L = fork.type === 'risk' ? (fork.busy < 0 ? 'LEFT: RISK ×2 · RIGHT: SAFE' : 'LEFT: SAFE · RIGHT: RISK ×2')
+    : (fork.busy < 0 ? 'LEFT: EXIT (lose the cops)' : 'RIGHT: EXIT (lose the cops)');
+  toast('🔀 FORK AHEAD', (save.stats.forks ? '' : 'Pick a side before the barrier! ') + L, '#36e7ff');
+  AudioSys.tone(740, 0.1, { type: 'square', vol: 0.06 }); AudioSys.tone(988, 0.12, { type: 'square', vol: 0.06, delay: 0.12 });
+}
+function endFork() {
+  fork.active = false; fork.mul = 1; if (fork.root) fork.root.visible = false;
+  if (typeof run === 'object' && run && run.dist !== undefined) run.nextFork = run.dist + rand(1800, 2800);
+}
+const _forkPV = placeVehicle;
+placeVehicle = function (type, lane, z, speed) {
+  if (fork.active) {
+    const d = worldDist - z, inside = d > fork.gore - 70 && d < fork.end + 10, ls = lane <= 1 ? -1 : 1;
+    if (inside && ls !== fork.busy && !fork._own) return null;   // lado tranquilo: sin tráfico nuevo
+    const v = _forkPV(type, lane, z, speed);
+    if (v && inside) { v.changed = true; v.pending = null; }
+    return v;
+  }
+  return _forkPV(type, lane, z, speed);
+};
+const _forkAS = addScore;
+addScore = function (v) { _forkAS(v * (fork.mul || 1)); };
+const _forkRB = startRB;
+startRB = function () { if (fork.active) { run.nextRB = run.dist + 200; return; } _forkRB(); };
+function updateFork(dt) {
+  if (state !== 'playing') { if (state !== 'paused' && fork.active) endFork(); return; }
+  if (run.nextFork === undefined) run.nextFork = 1000 + rand(0, 500);
+  if (!fork.active) {
+    if (run.dist >= run.nextFork && !rb.active) { const sl = forkSlot(); if (sl) startFork(sl); else run.nextFork = run.dist + 150; }
+    return;
+  }
+  const P = fork.parts, zg = zz(fork.gore), ze = zz(fork.end);
+  P.div.scale.z = fork.L; P.div.position.z = zg - fork.L / 2;
+  P.neon.scale.z = fork.L; P.neon.position.z = zg - fork.L / 2;
+  P.gore.position.z = zg + 1.3;
+  P.gantry.position.z = zg + FORK.SIGN_AHEAD;
+  // contenido: monedas en el lado rico, tráfico denso en el lado ocupado
+  const horizon = worldDist - (SPAWN_Z - 20);
+  while (fork.nextCoin <= horizon && fork.nextCoin <= fork.end - 15) {
+    const d = fork.nextCoin; coins.push({ x: fork.rich * (4 + 1.9 * Math.sin(d * 0.045)), y: 1, z: zz(d), alive: true }); fork.nextCoin += 6.5;
+  }
+  while (fork.nextCar <= worldDist - SPAWN_Z && fork.nextCar <= fork.end - 25) {
+    const lanes = fork.busy < 0 ? [0, 1] : [2, 3];
+    fork._own = true; const v = placeVehicle(Math.random() < 0.18 ? 'truck' : 'car', pick(lanes), zz(fork.nextCar), rand(17, 24)); fork._own = false;
+    if (v) v.crossed = false;
+    fork.nextCar += rand(fork.type === 'escape' ? 22 : 26, fork.type === 'escape' ? 32 : 38);
+  }
+  // elegir lado al pasar el morro
+  if (!fork.side && worldDist >= fork.gore - P_HL) {
+    fork.side = player.x < 0 ? -1 : 1;
+    if (Math.abs(player.x) < FORK.DIV_HW + P_HW - 0.2) {
+      if (player.shield) { player.shield = false; player.invuln = 1.2; AudioSys.sfx('shield'); flash('#00f0ff'); toast('SHIELD SAVED YOU', '', '#00f0ff'); }
+      else if (player.invuln <= 0) {
+        player.speed *= 0.5; player.nitro = Math.max(0, player.nitro - 30); player.nitroOn = false; run.combo = 0;
+        flash('#ff3b5c'); shake = Math.max(shake, 0.9); buzz([60, 30, 110]); AudioSys.sfx('cone');
+        burst(0, 0.8, -1, 30, { color: [1, 0.85, 0.2], speed: 9, up: 6, life: 0.6, size: 0.45, spread: 0.6, grav: 12 });
+        toast('💥 TOO LATE!', 'Pick a side earlier', '#ff3b5c');
+      }
+      player.x = fork.side * (FORK.DIV_HW + P_HW + 0.1);
+    }
+    save.stats.forks = (save.stats.forks || 0) + 1;
+    fork.s0 = run.score; fork.c0 = run.coinsPicked;
+    const onBusy = fork.side === fork.busy;
+    if (fork.type === 'risk') {
+      if (onBusy) { fork.mul = 2; heatAdd(12); run.riskForks = (run.riskForks || 0) + 1; toast('RISK ROUTE', 'SCORE ×2 — watch the traffic!', '#ffd23f'); AudioSys.sfx('mission'); }
+      else { run.heat = Math.max(0, (run.heat || 0) - 20); toast('SAFE ROUTE', 'Heat cooling down', '#3dff8a'); }
+    } else {
+      if (onBusy) {
+        run.heat = Math.max(0, (run.heat || 0) - 25); run.riskForks = (run.riskForks || 0) + 1;
+        if (police.active) endChase('escaped'); else toast('CLEAN EXIT', 'Heat cooling down', '#36e7ff');
+      } else { fork.mul = 2; toast('MAIN ROAD', 'Coins ×2 — the cops are still on you!', '#ffd23f'); }
+    }
+  }
+  // dentro: la mediana es un muro
+  if (fork.side && worldDist < fork.end) {
+    const lim = FORK.DIV_HW + P_HW;
+    if (fork.side * player.x < lim) {
+      player.x = fork.side * lim;
+      if (player.vx * fork.side < 0) player.vx *= -0.3;
+      player.speed = Math.max(15, player.speed - 16 * dt); shake = Math.max(shake, 0.12);
+      if (fxChance(0.7, dt)) burst(fork.side * FORK.DIV_HW, 0.5, rand(-1.5, 1.5), 2, { color: [1, 0.8, 0.3], speed: 6, up: 4, life: 0.35, size: 0.35, spread: 0.5, grav: 14 });
+    }
+    if (police.active) {
+      police.x = fork.side * Math.max(lim, fork.side * police.x);
+      if (copModel && copModel.root.visible) copModel.root.position.x = police.x;
+    }
+    if (typeof cop2 === 'object' && cop2 && cop2.root.visible) cop2.root.position.x = fork.side * Math.max(lim, fork.side * cop2.root.position.x);
+  }
+  // salida de la bifurcación
+  if (fork.side && worldDist >= fork.end && fork.mul !== 0) {
+    if (fork.mul > 1) {
+      const pts = Math.max(0, Math.round(run.score - fork.s0)), cn = run.coinsPicked - fork.c0;
+      toast('ROUTE CLEARED', `+${fmt(pts)} pts · ${cn} coins`, '#3dff8a');
+    }
+    fork.mul = 0;
+  }
+  if (ze > 40) endFork();
+}
+function forkFx(t) {
+  if (!fork.active || !fork.parts) return;
+  const zg = zz(fork.gore), on = Math.sin(t * 10) > 0;
+  glow.add(-0.5, 1.3, zg + 2.6, 1.4, 1, 0.8, 0.1, on ? 0.9 : 0.2); glow.add(0.5, 1.3, zg + 2.6, 1.4, 1, 0.8, 0.1, on ? 0.2 : 0.9);
+  const z0 = Math.max(zg - fork.L, -260), z1 = Math.min(zg, 30);
+  for (let z = z1; z > z0; z -= 14) glow.add(0, 1.06, z, 1.1, 0.2, 0.95, 1, 0.35);
+  const ga = zg + FORK.SIGN_AHEAD;
+  if (ga < 30 && ga > -300) fork.parts.panels.forEach(p => glow.add(p.s * 4.7, 6.2, ga + 0.6, 7, p.s === fork.busy ? 1 : 0.25, p.s === fork.busy ? 0.8 : 1, 0.35, 0.18));
+}
+
+/* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
    - Ranking: diario (reto), hoy, semana y siempre. Mejor marca por jugador.
    - Reto diario: mismo coche de serie, mismas zonas/túneles y misma hora del día
@@ -4821,7 +5003,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '8022b8be';
+window.NS_BUILD = '85cdced2';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
@@ -4850,6 +5032,6 @@ window.NeonSpeed = {
   get audio() { return { ready: AudioSys.ready, samples: AudioSys.buf ? Object.keys(AudioSys.buf) : [], music: Music.tracks ? Music.tracks.map(t => t.n + ':' + (t.el.paused ? 'paused' : 'playing') + ':' + t.vol.toFixed(2)) : null }; },
   get drawCalls() { return renderer.info.render.calls; },
   step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); },
-  get police() { return police; }, startChase, get heli() { return heli; }, startHeli, get heatApi() { return { add: heatAdd, lv: heatLv, mul: heatMul, rb, startRB, get heat() { return run.heat; } }; }, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
+  get police() { return police; }, startChase, get heli() { return heli; }, startHeli, get forkApi() { return { fork, startFork, forkSlot, get worldDist() { return worldDist; } }; }, get heatApi() { return { add: heatAdd, lv: heatLv, mul: heatMul, rb, startRB, get heat() { return run.heat; } }; }, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
 };
 })();
