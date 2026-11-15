@@ -468,6 +468,39 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .bcard .bicon img{width:100%;height:100%;object-fit:contain;display:block}
 .bcard.got .bicon{background:none;box-shadow:none;filter:drop-shadow(0 0 8px rgba(255,210,63,.55))}
 .bcard:not(.got) .bicon img{filter:grayscale(1) brightness(.7)}
+
+/* v16: GARAGE al estilo de la intro */
+#garage.screen::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+ background:radial-gradient(90% 60% at 50% 112%,rgba(255,43,214,.38),transparent 62%),radial-gradient(70% 55% at 0% 0%,rgba(0,240,255,.26),transparent 58%),
+ linear-gradient(180deg,rgba(2,1,10,.62),rgba(2,1,10,0) 28%,rgba(2,1,10,0) 62%,rgba(2,1,10,.72)),
+ radial-gradient(rgba(0,240,255,.16) 1px,transparent 1.4px) 0 0/6px 6px}
+#garage.screen::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;pointer-events:none;background:linear-gradient(90deg,transparent,#00f0ff,#ff2bd6,transparent);box-shadow:0 0 18px #ff2bd6}
+#garage .sheet{position:relative;z-index:1}
+#garage .sheet{background:#06050f;backdrop-filter:none;-webkit-backdrop-filter:none;border:1px solid rgba(0,240,255,.55);border-radius:18px;box-shadow:0 0 30px rgba(0,240,255,.25),inset 0 0 44px rgba(0,240,255,.06)}
+#garage .sheet h2{font-style:italic;font-weight:900;letter-spacing:.05em;color:#fff;line-height:1;text-shadow:0 0 6px #00f0ff,0 0 18px #00f0ff,0 0 36px rgba(0,240,255,.6)}
+#garage .sheet h2 small{display:block;font-family:'Orbitron';font-style:normal;font-weight:700;font-size:.42em;letter-spacing:.22em;color:#ff7ad9;text-shadow:0 0 10px #ff2bd6;margin-top:.35em}
+#garage .coins-pill{background:#06050f;border:1px solid rgba(0,240,255,.6);color:#ffd23f;box-shadow:0 0 14px rgba(0,240,255,.25)}
+#garage .tab{font-style:italic;color:#bff9ff;background:rgba(0,240,255,.05);border:1px solid #00f0ff;box-shadow:inset 0 0 10px rgba(0,240,255,.22);border-radius:8px}
+#garage .tab.on{color:#fff;border:none;background:linear-gradient(90deg,#ff2bd6,#ff4fa0);box-shadow:0 0 18px rgba(255,43,214,.7)}
+#garage .card{background:#0b0a1a;border:1px solid rgba(0,240,255,.22);border-radius:10px}
+#garage .card:hover{border-color:rgba(0,240,255,.6);background:#0e0d22}
+#garage .card.prev{border-color:#00f0ff;box-shadow:0 0 14px rgba(0,240,255,.3)}
+#garage .card.sel{border-color:#ff2bd6;background:rgba(255,43,214,.08);box-shadow:0 0 16px rgba(255,43,214,.4)}
+#garage .card .name{font-style:italic;color:#fff}
+#garage .swatch{border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 -8px 14px rgba(0,0,0,.35),0 0 14px rgba(0,240,255,.25)}
+#garage .bar i{background:linear-gradient(90deg,#00f0ff,#ff2bd6)}
+#garage .pips i.on{background:#ff2bd6;box-shadow:0 0 8px #ff2bd6}
+#garage .btn.ghost{font-family:'Orbitron';letter-spacing:.14em;text-transform:uppercase;color:#bff9ff;background:rgba(0,240,255,.05);border:1px solid #00f0ff;box-shadow:inset 0 0 12px rgba(0,240,255,.22)}
+#garage .btn.ghost:disabled{opacity:.55}
+#garage .btn.primary{background:linear-gradient(90deg,#ff2bd6,#ff4fa0);border:none;box-shadow:0 0 16px rgba(255,43,214,.65)}
+#garage .chip-opt{border-color:rgba(0,240,255,.4);background:rgba(0,240,255,.05)}
+#garage .chip-opt.on{border-color:#ff2bd6;background:rgba(255,43,214,.2);box-shadow:0 0 10px rgba(255,43,214,.55)}
+#garage .tune-head{font-family:'Orbitron';font-style:italic;font-weight:800;color:#7ff6ff;letter-spacing:.1em}
+.g-hero{display:none;position:absolute;pointer-events:none;flex-direction:column;gap:6px}
+#garage .g-hero{display:flex;position:absolute;z-index:1;left:4vw;bottom:9vh}
+.g-hero small{align-self:flex-start;font-family:'Orbitron';font-weight:800;font-size:12px;letter-spacing:.22em;color:#05061a;background:#00f0ff;padding:4px 10px;border-radius:4px;box-shadow:0 0 14px #00f0ff}
+.g-hero b{font-family:'Orbitron';font-style:italic;font-weight:900;font-size:clamp(30px,5vw,66px);line-height:1;color:#fff;text-shadow:0 0 6px #ff2bd6,0 0 20px #ff2bd6,0 0 44px rgba(255,43,214,.6)}
+@media (orientation:portrait){#garage .g-hero{left:5vw;bottom:auto;top:3vh}#garage .g-hero b{font-size:clamp(26px,9vw,44px)}}
 </style>
 </head>
 <body>
@@ -531,8 +564,9 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 
 <!-- GARAGE -->
 <div id="garage" class="screen">
+  <div class="g-hero"><small id="g-hero-tag"></small><b id="g-hero-name"></b></div>
   <div class="panel sheet">
-    <div class="sheet-head"><h2>GARAGE</h2><span class="coins-pill">🪙 <span id="g-coins">0</span></span></div>
+    <div class="sheet-head"><h2>GARAGE<small>ガレージ</small></h2><span class="coins-pill">🪙 <span id="g-coins">0</span></span></div>
     <div class="tabs"><button class="tab on" data-action="tab-cars" id="tab-cars">CARS</button><button class="tab" data-action="tab-upg" id="tab-upg">UPGRADES</button><button class="tab" data-action="tab-tune" id="tab-tune">TUNING</button></div>
     <div class="list" id="g-list"></div>
     <button class="btn ghost" data-action="back">BACK</button>
@@ -810,15 +844,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=7673cf0863'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=e37e7a8151'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10274430;
-  fetch('game.js?v=7673cf0863').then(function (r) {
+  var TOTAL = 10274931;
+  fetch('game.js?v=e37e7a8151').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {

@@ -1968,6 +1968,7 @@ ghostModel.root.visible = false; scene.add(ghostModel.root);
 const LANES = [-6, -2, 2, 6], X_LIMIT = 7.25, P_HL = 2.15, SPAWN_Z = -300;
 let P_HW = 0.95;
 let state = 'boot', prevState = 'menu', settingsReturn = 'menu';
+let garageSaved = null;
 let cycle = 0.16, simTime = 0, countdown = 0, crashT = 0, shake = 0;
 const bend = { x: 0, y: 0, tx: 0, ty: 0, dist: 300 };
 const input = { left: false, right: false, brake: false, nitro: false };
@@ -2789,6 +2790,8 @@ function statBars(st) {
 }
 function renderGarage() {
   $('g-coins').textContent = fmt(save.coins);
+  { const hc = CARS.find(c => c.id === (previewId || save.selected)); if (hc && $('g-hero-name')) { const ow = save.owned.includes(hc.id);
+    $('g-hero-name').textContent = hc.name; $('g-hero-tag').textContent = save.selected === hc.id ? 'EQUIPPED' : ow ? 'OWNED' : 'LOCKED · 🪙 ' + fmt(hc.price); } }
   $('tab-cars').classList.toggle('on', garageTab === 'cars');
   $('tab-upg').classList.toggle('on', garageTab === 'upg');
   $('tab-tune').classList.toggle('on', garageTab === 'tune');
@@ -3183,7 +3186,8 @@ function update(realDt) {
   let ws = 0;
   if (state === 'menu' || state === 'garage' || state === 'missions') {
     ws = 14; player.speed = 14; player.x = 0; player.vx = 0; player.steer = 0;
-    cycle = (cycle + dt / CYCLE_SECONDS) % 1;
+    if (state === 'garage') { if (garageSaved == null) garageSaved = cycle; cycle = 0.78; }
+    else { if (garageSaved != null) { cycle = garageSaved; garageSaved = null; } cycle = (cycle + dt / CYCLE_SECONDS) % 1; }
   } else if (state === 'countdown') {
     countdown -= dt;
     const now = Math.ceil(countdown);
@@ -4579,7 +4583,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '693fd18d';
+window.NS_BUILD = '759c59f7';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
