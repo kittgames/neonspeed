@@ -1076,10 +1076,12 @@ function scrollWorld(d, t) {
   [poleMesh, armMesh, bulbMesh, poolMesh].forEach(m => { m.instanceMatrix.needsUpdate = true; });
   TREES.forEach((tr, i) => {
     const z = tr.z + d; tr.z = wrap(z); if (z > WRAP_Z) newTree(tr);
-    const sc = WORLD.city || ZONE_HIDE(tr.z, 'tree', 3) ? HIDE : tr.sc;
+    const hid = WORLD.city || ZONE_HIDE(tr.z, 'tree', 3), sc = hid || WORLD.palms ? HIDE : tr.sc;
     setInst(TREE_MESH[tr.k], tr.j, tr.x, 0, tr.z, sc, sc, sc, tr.ry);
+    if (WORLD.palmT) { const ps = hid || !WORLD.palms ? HIDE : tr.sc * 1.15; setInst(WORLD.palmT, i, tr.x, 0, tr.z, ps, ps, ps, tr.ry); setInst(WORLD.palmC, i, tr.x, 0, tr.z, ps, ps, ps, tr.ry); }
   });
   TREE_MESH.forEach(m => { m.instanceMatrix.needsUpdate = true; });
+  if (WORLD.palmT) { WORLD.palmT.instanceMatrix.needsUpdate = true; WORLD.palmC.instanceMatrix.needsUpdate = true; }
   BUSHES.forEach(b => {
     const z = b.z + d; b.z = wrap(z); if (z > WRAP_Z) newBush(b);
     const sc = WORLD.city || ZONE_HIDE(b.z, 'tree', 3) ? HIDE : b.sc;
@@ -1105,7 +1107,7 @@ function scrollWorld(d, t) {
     c.parts.forEach(q => setInst(cloudMesh, ci++, c.position.x + q[0], c.position.y + q[1], c.position.z + q[2], q[3], q[3], q[3]));
   });
   cloudMesh.instanceMatrix.needsUpdate = true;
-  roadTex.offset.y += d / TILE; grassTex.offset.y += d / 8; cityGroundTex.offset.y = grassTex.offset.y;
+  roadTex.offset.y += d / TILE; grassTex.offset.y += d / 8; if (typeof sandTex !== 'undefined') sandTex.offset.y = grassTex.offset.y; cityGroundTex.offset.y = grassTex.offset.y;
   if (roadTex.offset.y > 1000) roadTex.offset.y -= 1000;
   if (grassTex.offset.y > 1000) grassTex.offset.y -= 1000;
 }
@@ -2033,7 +2035,7 @@ function resetRun() {
   Weather.rain = Weather.wet = Weather.flash = Weather.target = 0;
   run = { dist: 0, score: 0, time: 0, coinsPicked: 0, nearMisses: 0, combo: 0, comboTimer: 0, bestCombo: 0,
     overtakes: 0, nitroUses: 0, powerups: 0, nightDist: 0, nextSpawn: 70, nextCoin: 90, nextPU: 520, saved: false, edges: 0, tunnels: 0,
-    rainDist: 0, maxKmh: 0, escapes: 0, bonusCoins: 0, busted: false, newBadges: [], nextCop: 1700 + Math.random() * 900, nextHeli: 2800 + Math.random() * 1200 };
+    rainDist: 0, maxKmh: 0, escapes: 0, bonusCoins: 0, busted: false, newBadges: [], nextCop: 1700 + Math.random() * 900, nextHeli: 1700 + Math.random() * 700 };
   resetPlayer();
   clearZones(); flyingCones.length = 0; slowmo = 0; nightsThisRun = 0;
   P = perf();
@@ -3435,8 +3437,8 @@ function updatePolice(dt) {
     // The cop matches your speed plus a little; braking, walls and slowdowns let it close in fast
     // v17: corre más. Sin nitro se pega a tu cola (siempre a la vista) y luego aprieta poco a poco
     const far = police.gap > COP.TAIL;
-    let close = far ? 3.4 + 0.35 * difficulty() : 0.3 + 0.2 * difficulty();
-    if (police.two) close *= 1.25;
+    let close = far ? 4.2 + 0.35 * difficulty() : 0.62 + 0.25 * difficulty();
+    if (police.two) close *= 1.3;
     if (player.brake) close += 7;
     if (player.wall) close += 5;
     const copSpeed = Math.min(topNoNitro * 1.07 + 2, player.speed + close + Math.max(0, topNoNitro - player.speed) * 0.6);
@@ -3770,7 +3772,7 @@ const WORLDS = [
   { id: 'neon',   name: 'NEON CITY',     sub: 'Highway · city lights',              x: 22, y: 58, unlock: null },
   { id: 'tokyo',  name: 'TOKYO EXPRESS', sub: 'Shuto expressway · neon & rain',     x: 82, y: 40, unlock: { lvl: 3, coins: 1500 } },
   { id: 'touge',  name: 'MOUNTAIN TOUGE',sub: 'Night mountain pass',                x: 70, y: 22, soon: true },
-  { id: 'miami',  name: 'MIAMI BEACH',   sub: 'Synthwave coast at sunset',          x: 12, y: 30, soon: true },
+  { id: 'miami',  name: 'MIAMI BEACH',   sub: 'Art deco coast · synthwave sunsets', x: 12, y: 30, unlock: { lvl: 5, coins: 2500 } },
   { id: 'desert', name: 'DESERT NIGHT',  sub: 'Endless straight under the stars',   x: 44, y: 76, soon: true },
 ];
 const worldById = id => WORLDS.find(w => w.id === id) || WORLDS[0];
@@ -3829,21 +3831,59 @@ const bladeTex = canvasTex(128, 1024, (x, w, h) => {
 const bladeMat = basic({ map: bladeTex, color: new THREE.Color(1, 1, 1) });
 const bladeMesh = inst(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), bladeMat, BLD.length);
 BLD.forEach((b, i) => bladeMesh.setColorAt(i, new THREE.Color(...pick(Object.values(NEON_COLS)))));
+// Sand for the beach world (Miami)
+const sandTex = canvasTex(1024, 1024, (x, w, h) => {
+  x.fillStyle = '#e2cfa0'; x.fillRect(0, 0, w, h);
+  for (let i = 0; i < 26000; i++) { const v = 150 + Math.random() * 90; x.fillStyle = `rgba(${v + 15},${v},${v * 0.72},0.3)`; x.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+  x.strokeStyle = 'rgba(160,130,80,.22)'; x.lineWidth = 5;
+  for (let i = 0; i < 16; i++) { const y = (i + 0.5) * h / 16; x.beginPath(); x.moveTo(0, y); for (let k = 0; k <= 8; k++) x.quadraticCurveTo((k + 0.5) * w / 8, y + (k % 2 ? 9 : -9), (k + 1) * w / 8, y); x.stroke(); }
+});
+sandTex.wrapS = sandTex.wrapT = THREE.RepeatWrapping; sandTex.repeat.copy(grassTex.repeat); sandTex.anisotropy = 8;
+// Palm trees for the beach world: leaning trunk + crown of drooping fronds, one InstancedMesh each
+function palmMerge(list) {
+  const pos = [], nor = [];
+  list.forEach(g => {
+    g.computeVertexNormals();
+    const P = g.attributes.position.array, N = g.attributes.normal.array, I = g.index ? g.index.array : null, n = I ? I.length : P.length / 3;
+    for (let k = 0; k < n; k++) { const v = (I ? I[k] : k) * 3; pos.push(P[v], P[v + 1], P[v + 2]); nor.push(N[v], N[v + 1], N[v + 2]); }
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.computeBoundingSphere(); return g;
+}
+(() => {
+  const segs = [];
+  for (let i = 0; i < 5; i++) {
+    const c = new THREE.CylinderGeometry(0.2 - i * 0.02, 0.24 - i * 0.02, 1.5, 6);
+    c.rotateZ(-0.05 * i); c.translate(0.04 * i * i, 0.75 + i * 1.45, 0); segs.push(c);
+  }
+  const fr = [];
+  for (let i = 0; i < 8; i++) {
+    const f = new THREE.ConeGeometry(0.42, 3.3, 4); f.scale(1, 1, 0.16);
+    f.translate(0, 1.65, 0); f.rotateZ(-1.25 - (i % 2) * 0.28); f.rotateY(i * Math.PI / 4 + 0.2); f.translate(0.64, 7.25, 0); fr.push(f);
+  }
+  const nut = new THREE.SphereGeometry(0.36, 6, 5); nut.translate(0.64, 7.1, 0); fr.push(nut);
+  WORLD.palmT = inst(palmMerge(segs), std({ color: col(0x8a6a48), roughness: 0.95, flatShading: true }), TREES.length, true);
+  WORLD.palmC = inst(palmMerge(fr), std({ color: col(0x2f9a4a), roughness: 0.85, flatShading: true, side: THREE.DoubleSide }), TREES.length, true);
+  TREES.forEach((t, i) => { setInst(WORLD.palmT, i, 0, 0, 0, HIDE, HIDE, HIDE); setInst(WORLD.palmC, i, 0, 0, 0, HIDE, HIDE, HIDE); });
+})();
 function applyWorldNow(id, pack) {
   const w = worldById(id);
-  WORLD.id = w.id; WORLD.city = id === 'tokyo'; WORLD.storm = id === 'tokyo' ? 0.85 : 0.55; WORLD.blades = id === 'tokyo';
+  const miami = id === 'miami';
+  WORLD.id = w.id; WORLD.city = id === 'tokyo'; WORLD.storm = id === 'tokyo' ? 0.85 : miami ? 0.25 : 0.55; WORLD.blades = id === 'tokyo'; WORLD.palms = miami;
   const U = skyMat.uniforms;
   ['p0', 'p1', 'p2', 'p3'].forEach((k, i) => { U[k].value = pack.pano[i]; });
   U.hv.value.set(...pack.hv); U.vs.value.set(...pack.vs);
   pack.haze.forEach((c, i) => PANO_HAZE[i].copy(c));
   signMats.forEach((m, i) => { m.map = pack.ads[i % pack.ads.length]; m.needsUpdate = true; });
   FAC.forEach((m, k) => {
-    const f = WORLD.city ? (k === 0 || k === 1 ? pack.fac[0] : k === 2 ? pack.fac[1] : NEON_PACK.fac[3]) : NEON_PACK.fac[k];
+    const f = WORLD.city || miami ? (k === 0 || k === 1 ? pack.fac[0] : k === 2 ? pack.fac[1] : NEON_PACK.fac[3]) : NEON_PACK.fac[k];
     m.map = f.map; m.emissiveMap = f.emi; m.userData.tile.value.copy(f.tile); m.needsUpdate = true;
   });
-  grassMat.map = WORLD.city ? cityGroundTex : grassTex; grassMat.needsUpdate = true;
-  moundMat.color.copy(col(WORLD.city ? 0x30333b : 0x4f7f45));
-  poolMat.color.set(WORLD.city ? 0xbfe4ff : 0xffc77a);
+  grassMat.map = WORLD.city ? cityGroundTex : miami ? sandTex : grassTex; grassMat.needsUpdate = true;
+  sandTex.offset.copy(grassTex.offset);
+  moundMat.color.copy(col(WORLD.city ? 0x30333b : miami ? 0xcdb684 : 0x4f7f45));
+  poolMat.color.set(WORLD.city ? 0xbfe4ff : miami ? 0xff8fd8 : 0xffc77a);
   BLD.forEach(newBuilding);
   if (Music.tracks) {
     const race = Music.tracks.find(t => t.n === 'race');
@@ -4125,7 +4165,7 @@ const HELI = {"body":{"p":"qoGoPy5bxD0gQh7A3dGpPwSbOj0eqBjA0m6mP548vj3OpR7AqoGoP
    Modelo: Magnific (Meshy T2), rotor separado para girarlo.
    ===================================================================== */
 const HELI_CFG = {
-  MIN_DIST: 2600,        // no aparece antes de esta distancia
+  MIN_DIST: 1600,        // no aparece antes de esta distancia
   ARRIVE: 2.2, TRACK: 2.2, RETRACK: 1.2, LOCK: 1.3, FIRE: 0.35,
   HIT_R: 1.6,            // radio de la marca (m): sal de ahí y falla
   EMP_TIME: 2.8, EMP_SPEED: 0.72,
@@ -4331,11 +4371,11 @@ const HEAT = {
   NAME: ['CALM', 'WARM', 'HOT', 'BLAZING', 'INFERNO'],
   MSG: ['', 'Helicopters join the hunt', 'Police patrols join the hunt', 'Roadblocks ahead — find the gap!', 'INFERNO · points ×2'],
   COL: ['#7ff6ff', '#ffd23f', '#ff9a2b', '#ff4d2b', '#ff2bd6'],
-  RB_MIN: 3200,
+  RB_MIN: 2200,
 };
 function heatLv() { return (typeof run === 'object' && run && run.heat !== undefined) ? Math.min(5, Math.floor(run.heat / 20) + 1) : 1; }
 function heatMul() { return HEAT.MUL[heatLv() - 1]; }
-function heatCd() { const l = heatLv(); return l >= 5 ? 0.6 : l >= 4 ? 0.8 : 1; }
+function heatCd() { const l = heatLv(); return l >= 5 ? 0.45 : l >= 4 ? 0.6 : l >= 3 ? 0.8 : 0.9; }
 function heatInit() { run.heat = 0; run.heatLv = 1; run.maxHeat = 0; run.nextRB = HEAT.RB_MIN + rand(0, 700); run.rbClears = 0; }
 function heatAdd(v) {
   if (typeof run !== 'object' || !run || state !== 'playing') return;
@@ -4381,7 +4421,7 @@ function startRB() {
 }
 function endRB() {
   rb.active = false; if (rb.root) rb.root.visible = false;
-  if (typeof run === 'object' && run) run.nextRB = run.dist + rand(3200, 4800) * heatCd();
+  if (typeof run === 'object' && run) run.nextRB = run.dist + rand(3000, 4200) * heatCd();
 }
 function updateHeat(dt, ws) {
   updateCop2(dt);
@@ -4742,7 +4782,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '81f3f716';
+window.NS_BUILD = 'e0361eb3';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
