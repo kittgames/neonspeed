@@ -3633,12 +3633,13 @@ function avatarLockText(a) {
   if (a.badge) { const b = BADGES.find(x => x.id === a.badge); return b ? b.icon + ' ' + b.name : ''; }
   return '';
 }
+const AV_ART = { rookie: 'rookie', bolt: 'volt', flame: 'blaze', star: 'star', wheel: 'wheel', moon: 'moon', storm: 'storm', siren: 'siren', rocket: 'rocket', diamond: 'diamond', skull: 'skull', crown: 'crown' };
+const ART_V = '664be61e';
 function avatarSVG(id, size, locked) {
-  const a = avById(id), uid = 'av' + a.id + (locked ? 'L' : '') + Math.round(size);
-  return `<svg viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true"${locked ? ' style="filter:grayscale(1) brightness(.45)"' : ''}>
-    <defs><radialGradient id="${uid}" cx="50%" cy="38%" r="62%"><stop offset="0" stop-color="${a.c2}"/><stop offset="1" stop-color="#05061a"/></radialGradient></defs>
-    <circle cx="32" cy="32" r="30" fill="url(#${uid})" stroke="${a.c}" stroke-width="2.5"/>${a.icon(a.c)}</svg>`;
+  const a = avById(id);
+  return `<img class="avimg${locked ? ' lk' : ''}" src="img/${AV_ART[a.id] || 'rookie'}.webp?v=${ART_V}" width="${size}" height="${size}" alt="" draggable="false">`;
 }
+function badgeImg(id) { return `<img src="img/b_${id}.webp?v=${ART_V}" alt="" draggable="false">`; }
 function refreshAvatars() {
   if (!avatarUnlocked(avById(save.avatar))) save.avatar = 'rookie';
   document.querySelectorAll('.profile .avatar, .profile-hud .avatar').forEach(el => { el.innerHTML = avatarSVG(save.avatar, 36); });
@@ -3677,7 +3678,7 @@ function renderProfile() {
         : b.total
           ? `<div class="prog"><i style="width:${(p * 100).toFixed(0)}%"></i></div><div class="ptxt">${b.dec ? Math.min(v, b.goal).toFixed(b.dec) : fmt(Math.min(v, b.goal))}${b.unit || ''} / ${fmt(b.goal)}${b.unit || ''} · 🪙 ${b.reward}</div>`
           : `<div class="ptxt">🪙 ${b.reward}</div>`;
-      return `<div class="bcard ${got ? 'got' : ''}"><div class="bicon">${b.icon}</div><div class="info"><div class="name">${b.name}</div><div class="desc">${b.desc}</div>${prog}</div></div>`;
+      return `<div class="bcard ${got ? 'got' : ''}"><div class="bicon">${badgeImg(b.id)}</div><div class="info"><div class="name">${b.name}</div><div class="desc">${b.desc}</div>${prog}</div></div>`;
     }).join('')}</div>`;
   }
 }
@@ -4578,7 +4579,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '7f56cb16';
+window.NS_BUILD = '693fd18d';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
