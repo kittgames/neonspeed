@@ -394,7 +394,20 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 #menu.alt-b .hint{position:absolute;left:50%;bottom:1.4%;transform:translateX(-50%);width:auto;max-width:70%;margin:0;padding:.5cqh 1.5cqh;border-radius:1cqh;background:rgba(6,5,18,.72);font-size:1.5cqh;color:#dfe6ff;opacity:1;text-align:center;box-sizing:border-box}
 #menu.alt-b .hint kbd{font-size:1.2cqh}
 #menu.alt-b .credits{position:absolute;left:8px;bottom:6px;margin:0;font-size:11px;color:#c8cde8;opacity:.6}
-@media (max-aspect-ratio:1/1){#menu.alt-b .ab-col .btn{font-size:1.9cqh}#menu.alt-b .ab-stats label{font-size:1.2cqh}}
+#menu.alt-b .ab-bg-m{display:none}
+@media (max-aspect-ratio:1/1){
+#menu.alt-b .ab-stage{width:min(100vw,calc(100vh*9/16));aspect-ratio:9/16}
+#menu.alt-b .ab-bg{display:none}
+#menu.alt-b .ab-bg-m{display:block}
+#menu.alt-b .ab-stats{left:50%;top:0;width:50%;height:6.6%;flex-direction:row;padding:0 2%;border:none;border-bottom:1px solid rgba(0,240,255,.6);border-radius:0;box-shadow:none}
+#menu.alt-b .ab-stats .s{flex-direction:column;align-items:center;justify-content:center;gap:.3cqh}
+#menu.alt-b .ab-stats label{font-size:1cqh;letter-spacing:.04em}
+#menu.alt-b .ab-stats b{font-size:2cqh}
+#menu.alt-b .ab-col{left:20%;top:63%;width:60%;height:34.5%;display:grid;grid-template-columns:1fr 1fr;gap:1.2cqh;padding:2.2% 3%;align-content:center;border-radius:2cqh;box-sizing:border-box}
+#menu.alt-b .ab-col .btn{height:6.6cqh;font-size:1.6cqh;letter-spacing:.06em;padding:0 1cqw;line-height:1.2;white-space:normal}
+#menu.alt-b .ab-col .btn.ab-play{grid-column:1/-1;height:7.6cqh;font-size:3.2cqh}
+#menu.alt-b .hint{display:none}
+}
 </style>
 </head>
 <body>
@@ -409,6 +422,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 <div id="menu" class="screen alt-b">
   <div class="ab-stage">
     <img class="ab-bg" src="menu-bg.webp" alt="">
+    <img class="ab-bg ab-bg-m" src="menu-bg-mobile.webp" alt="">
     <h1 class="title logo-title" style="display:none"><img id="logo-img" alt="NEON SPEED"></h1>
     <div class="ab-stats">
       <div class="s"><label>HIGH SCORE</label><b id="m-high">0</b></div>
