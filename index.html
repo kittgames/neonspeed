@@ -412,8 +412,8 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 
 /* RANKING */
 #ranking .rk{width:min(560px,94vw);max-height:92vh;display:flex;flex-direction:column;gap:10px}
-.rk-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-.rk-tabs .btn{padding:10px 4px;font-size:12px;letter-spacing:.08em}
+.rk-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.rk-tabs .btn{padding:10px 2px;font-size:11px;letter-spacing:.04em;min-width:0}
 .rk-tabs .btn.on{border-color:#00f0ff;color:#fff;background:rgba(0,240,255,.15);box-shadow:0 0 12px rgba(0,240,255,.35)}
 .rk-list{overflow-y:auto;min-height:120px;max-height:42vh;display:flex;flex-direction:column;gap:4px}
 .rk-row{display:grid;grid-template-columns:46px 1fr auto auto;gap:10px;align-items:center;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.05);font-size:13px}
@@ -448,6 +448,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 #menu.alt-b .ab-col .btn[data-action="worlds"]{font-size:1.7cqh;line-height:1;gap:.2cqh;padding-top:0;padding-bottom:0}
 #menu.alt-b #menu-world{font-size:1.1cqh;letter-spacing:.06em;line-height:1.1}
 @media (max-aspect-ratio:1/1){#menu.alt-b .ab-col .btn[data-action="worlds"]{font-size:1.5cqh}#menu.alt-b #menu-world{font-size:1cqh;letter-spacing:.03em}}
+@media (max-width:520px){.rk-tabs{gap:4px}.rk-tabs .btn{font-size:9.5px;letter-spacing:0;padding:9px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+
+.rk-row.has-go{grid-template-columns:46px 1fr auto auto auto}
+.rk-race{padding:5px 12px!important;font-size:11px!important}
+@media (max-width:520px){.rk-row.has-go{grid-template-columns:40px 1fr auto auto}}
+
+#menu.alt-b .ab-col .btn[data-action="ranking"]{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.2cqh;line-height:1;padding-top:0;padding-bottom:0;font-size:1.7cqh}
+#menu.alt-b #menu-daily{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.1cqh;letter-spacing:.06em;line-height:1.1;color:#ffd23f}
+@media (max-aspect-ratio:1/1){#menu.alt-b .ab-col .btn[data-action="ranking"]{font-size:1.5cqh}#menu.alt-b #menu-daily{font-size:1cqh;letter-spacing:.03em}}
 </style>
 </head>
 <body>
@@ -475,7 +484,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
       <button class="btn ghost" data-action="profile">PROFILE</button>
       <button class="btn ghost" data-action="worlds">WORLDS<span id="menu-world">NEON CITY</span></button>
       <button class="btn ghost" data-action="friends">FRIENDS</button>
-      <button class="btn ghost" data-action="ranking">RANKING</button>
+      <button class="btn ghost" data-action="ranking">RANKING<span id="menu-daily"></span></button>
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="settings">SETTINGS</button>
     </div>
@@ -525,8 +534,9 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     <div class="sheet-head"><h2>RANKING</h2></div>
     <div class="rk-tabs">
       <button class="btn ghost on" data-action="rk-tab" data-tab="d">DAILY</button>
+      <button class="btn ghost" data-action="rk-tab" data-tab="f">FRIENDS</button>
       <button class="btn ghost" data-action="rk-tab" data-tab="t">TODAY</button>
-      <button class="btn ghost" data-action="rk-tab" data-tab="w">WEEK</button>
+      <button class="btn ghost" data-action="rk-tab" data-tab="w">SEASON</button>
       <button class="btn ghost" data-action="rk-tab" data-tab="a">ALL TIME</button>
     </div>
     <p class="subnote" id="rk-info"></p>
@@ -556,6 +566,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     <div class="row-set"><span>GRAPHICS</span><button class="btn sm toggle" data-action="toggle-quality" id="s-quality">HIGH</button></div>
     <div class="row-set"><span>REDUCED MOTION</span><button class="btn sm toggle" data-action="toggle-motion" id="s-motion">OFF</button></div>
     <div class="row-set"><span>VIBRATION</span><button class="btn sm toggle" data-action="toggle-haptics" id="s-haptics">ON</button></div>
+    <div class="row-set"><span>MOVE PROGRESS</span><button class="btn sm ghost toggle" data-action="move-open">OPEN</button></div>
     <div class="row-set"><span>RESET PROGRESS</span><button class="btn sm ghost toggle" data-action="reset" id="s-reset">RESET</button></div>
     <button class="btn ghost" data-action="settings-back">BACK</button>
   </div>
@@ -595,6 +606,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     <button class="btn primary" data-action="restart">TRY AGAIN</button>
     <button class="btn pink" id="go-share" data-action="share-result">CHALLENGE FRIENDS</button>
     <button class="btn bet" id="go-bet" data-action="bet-create" hidden>🏁 BET A CAR</button>
+    <button class="btn gold" id="go-daily-share" data-action="share-daily" hidden>SHARE DAILY RESULT</button>
     <button class="btn ghost" data-action="garage">GARAGE</button>
     <button class="btn ghost" data-action="menu">MENU</button>
   </div>
@@ -645,6 +657,16 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
   <p>Same car and upgrades for both players. Traffic varies. Challenge scores are friendly and unverified. See the RANKING screen for the online leaderboard.</p>
   <label>CAR BETS · ONLINE</label><p>Bet a car from the game over screen. Got a bet code? Enter it here.</p><div class="modal-actions"><input id="bet-code" maxlength="80" placeholder="Bet code or link" style="flex:1;min-width:160px"><button class="btn gold sm" data-action="bet-code">OPEN BET</button></div><div id="bet-list"></div>
   <label>RECENT CHALLENGES · THIS DEVICE</label><div id="friend-history"></div>
+</dialog>
+<dialog id="move-dialog" class="friend-modal" aria-labelledby="move-title">
+  <h2 id="move-title">MOVE PROGRESS</h2>
+  <p>Take your coins, cars, online account and friends to another device or to a new link of the game.</p>
+  <label for="mv-code">1 · YOUR PROGRESS CODE</label><textarea id="mv-code" readonly spellcheck="false"></textarea>
+  <div class="modal-actions"><button class="btn primary sm" data-action="mv-copy">COPY CODE</button></div>
+  <label for="mv-in">2 · ON THE OTHER DEVICE, PASTE IT HERE</label><textarea id="mv-in" maxlength="200000" placeholder="NSP1-…" spellcheck="false"></textarea>
+  <p id="mv-msg" role="status" style="color:#ffd23f;min-height:20px"></p>
+  <div class="modal-actions"><button class="btn gold sm" id="mv-import" data-action="mv-import">IMPORT PROGRESS</button><button class="btn ghost sm" data-action="mv-close">BACK</button></div>
+  <p>Keep the code private: anyone with it can play as you.</p>
 </dialog>
 <dialog id="share-dialog" class="friend-modal" aria-labelledby="share-title">
   <h2 id="share-title">YOUR SCORE. THEIR NEXT TARGET.</h2>
@@ -777,15 +799,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=d716d1e761'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=f9351b4dc7'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 17197034;
-  fetch('game.js?v=d716d1e761').then(function (r) {
+  var TOTAL = 10274408;
+  fetch('game.js?v=f9351b4dc7').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
