@@ -501,6 +501,77 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .g-hero small{align-self:flex-start;font-family:'Orbitron';font-weight:800;font-size:12px;letter-spacing:.22em;color:#05061a;background:#00f0ff;padding:4px 10px;border-radius:4px;box-shadow:0 0 14px #00f0ff}
 .g-hero b{font-family:'Orbitron';font-style:italic;font-weight:900;font-size:clamp(30px,5vw,66px);line-height:1;color:#fff;text-shadow:0 0 6px #ff2bd6,0 0 20px #ff2bd6,0 0 44px rgba(255,43,214,.6)}
 @media (orientation:portrait){#garage .g-hero{left:5vw;bottom:auto;top:3vh}#garage .g-hero b{font-size:clamp(26px,9vw,44px)}}
+
+/* v17 · UI móvil: zonas táctiles grandes y menú vertical más claro */
+@media (pointer:coarse){
+.btn,.tab,.icon-btn{position:relative;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.btn::after,.tab::after,.icon-btn::after{content:'';position:absolute;inset:-6px}
+.btn{min-height:50px}
+.btn.sm{min-height:46px;padding:12px 16px;font-size:12px}
+.tab{min-height:48px;font-size:13px}
+.rk-tabs .btn{min-height:46px}
+.icon-btn{width:56px;height:56px;border-radius:18px;font-size:16px}
+.icon-btn::after{inset:-10px}
+}
+/* Controles de conducción */
+.tbtn{position:relative;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;
+ background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.04));border:1.5px solid rgba(255,255,255,.32);box-shadow:0 6px 18px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .08s,background .12s}
+.tbtn::after{content:'';position:absolute;inset:-12px -4px -22px -4px}
+.tbtn[data-touch="left"]::after{inset:-18px -4px -22px -18px}
+.tbtn[data-touch="right"]::after{inset:-18px -18px -22px -4px}
+.tbtn.on{transform:scale(.94);background:linear-gradient(180deg,rgba(0,240,255,.55),rgba(0,240,255,.2));border-color:#7ff6ff;box-shadow:0 0 26px rgba(0,240,255,.75)}
+.tbtn.brake{color:#ffb3b3;border-color:rgba(255,90,90,.75);background:linear-gradient(180deg,rgba(255,70,70,.28),rgba(255,70,70,.08))}
+.tbtn.brake.on{background:linear-gradient(180deg,rgba(255,70,70,.7),rgba(255,70,70,.3));border-color:#ff8a8a;box-shadow:0 0 24px rgba(255,70,70,.7);color:#fff}
+.tbtn.nitro{color:#fff;border-color:#7ff6ff;background:linear-gradient(180deg,rgba(0,240,255,.5),rgba(0,120,255,.28));box-shadow:0 0 22px rgba(0,240,255,.45),inset 0 1px 0 rgba(255,255,255,.35);font-size:15px;letter-spacing:.1em}
+.tbtn.nitro::before{content:'';position:absolute;inset:-4px -8px -22px -8px}
+.tbtn.nitro::after{content:'⚡';position:static;inset:auto;font-size:24px;line-height:1;order:-1}
+.tbtn.nitro.on{background:linear-gradient(180deg,#7ff6ff,#1a8cff);box-shadow:0 0 36px #00f0ff}
+.tbtn.brake{font-size:13px;letter-spacing:.1em}
+@media (orientation:portrait){
+#touch{padding:0 12px calc(18px + var(--sb))}
+.tgroup{gap:8px}
+#touch .tgroup:first-child .tbtn{width:min(29vw,124px);height:108px;border-radius:30px;font-size:40px}
+#touch .tgroup:last-child{flex-direction:column;gap:8px}
+#touch .tbtn.nitro{width:min(30vw,126px);height:108px;border-radius:30px}
+#touch .tbtn.brake{width:min(30vw,126px);height:60px;border-radius:22px}
+#touch .tbtn.brake::after{inset:-18px -8px -4px -8px}
+body.touch .hud-bottom{left:12px;transform:none;bottom:calc(138px + var(--sb))}
+body.touch .speedo{min-width:204px;padding:8px 16px}
+}
+@media (orientation:landscape) and (max-height:520px){
+#touch{padding:0 max(18px,env(safe-area-inset-left)) calc(12px + var(--sb))}
+#touch .tgroup:first-child .tbtn{width:104px;height:84px;border-radius:24px;font-size:34px}
+#touch .tbtn.nitro{width:96px;height:84px;border-radius:24px}
+#touch .tbtn.brake{width:84px;height:84px;border-radius:24px}
+}
+/* Menú principal vertical: panel a ancho completo, botones grandes */
+@media (max-aspect-ratio:1/1){
+#menu.alt-b .ab-stage{left:0;top:0;width:100vw;height:100vh;height:100dvh;aspect-ratio:auto;transform:none}
+#menu.alt-b .ab-bg-m{object-fit:cover;object-position:50% 0}
+#menu.alt-b .ab-col{left:4%;top:auto;bottom:max(14px,env(safe-area-inset-bottom));width:92%;height:auto;max-height:42%;display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px;align-content:center;border-radius:26px;background:rgba(6,5,20,.78);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid rgba(0,240,255,.45);box-shadow:0 0 30px rgba(0,240,255,.25),0 -10px 40px rgba(0,0,0,.5)}
+#menu.alt-b .ab-col .btn{height:60px;min-height:60px;font-size:14px;letter-spacing:.08em;border-radius:16px;padding:0 10px;display:flex;align-items:center;justify-content:center;gap:8px;line-height:1.15;background:rgba(0,240,255,.08);border:1px solid rgba(0,240,255,.55);color:#e8fdff}
+#menu.alt-b .ab-col .btn:active{background:rgba(0,240,255,.28);transform:scale(.96)}
+#menu.alt-b .ab-col .btn.ab-play{grid-column:1/-1;height:76px;min-height:76px;font-size:28px;border-radius:20px;letter-spacing:.12em;animation:v17pulse 2.2s ease-in-out infinite}
+#menu.alt-b .ab-col .btn.ab-play::before{content:'▶';font-size:22px;margin-right:6px;font-style:normal}
+#menu.alt-b .ab-col .btn:not(.ab-play)::before{position:absolute;left:14px;top:50%;transform:translateY(-50%)}
+#menu.alt-b .ab-col .btn:not(.ab-play){padding-left:44px;flex-direction:column;gap:0}
+#menu.alt-b .ab-col .btn[data-action="garage"]::before{content:'🚗';font-size:20px}
+#menu.alt-b .ab-col .btn[data-action="worlds"]::before{content:'🌏';font-size:20px}
+#menu.alt-b .ab-col .btn[data-action="ranking"]::before{content:'🏆';font-size:20px}
+#menu.alt-b .ab-col .btn[data-action="friends"]::before{content:'👥';font-size:20px}
+#menu.alt-b .ab-col .btn[data-action="missions"]::before{content:'🎯';font-size:20px}
+#menu.alt-b .ab-col .btn[data-action="settings"]::before{content:'⚙️';font-size:20px}
+#menu.alt-b #menu-world,#menu.alt-b #menu-daily{font-size:10px;letter-spacing:.03em}
+#menu.alt-b .ab-col .btn .badge{position:static;transform:none;margin-left:2px}
+#menu.alt-b .ab-stats{height:56px}
+#menu.alt-b .ab-stats label{font-size:9px}
+#menu.alt-b .ab-stats b{font-size:15px}
+}
+@keyframes v17pulse{0%,100%{box-shadow:0 0 18px rgba(255,43,214,.6)}50%{box-shadow:0 0 34px rgba(255,43,214,.95)}}
+
+body.touch #h-nitro-hint{display:none}
+body.touch .dist-row{justify-content:center}
+.tbtn,#touch .tbtn{overflow:visible!important}
 </style>
 </head>
 <body>
