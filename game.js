@@ -2903,7 +2903,7 @@ function openFriends() {
     history.appendChild(row);
   }
   if (!list.length) history.textContent = 'Your completed challenges will appear here on this device.';
-  $('friends-dialog').showModal();
+  frLoad(); $('friends-dialog').showModal();
 }
 function previewChallenge() {
   try {
@@ -3028,6 +3028,9 @@ function downloadResultCard() {
 const actions = {
   play() { activeChallenge = null; activeDaily = null; pendingGhost = null; startRun(); }, restart: startRun, menu: goMenu, back: goMenu,
   friends: openFriends,
+  'fr-add'(el) { frMsg = ''; frAdd(el.closest('.fr-box').querySelector('.fr-input').value); },
+  'fr-copy'(el) { frCopy(el.dataset.what); },
+  'fr-remove'(el) { frRemove(el.dataset.code); },
   ranking() { state = 'missions'; rankTab = 'd'; openRanking(); show('ranking'); },
   'rk-tab'(el) { rankTab = el.dataset.tab; renderRanking(); },
   'rk-go'() { if (rankTab === 'd') startDaily(); else startGhostRace(); },
@@ -3071,6 +3074,7 @@ const actions = {
   'profile-back'() { save.nickname = cleanNickname($('pr-name').value); persist(); goMenu(); },
   'pr-tab-badges'() { profileTab = 'badges'; renderProfile(); },
   'pr-tab-avatars'() { profileTab = 'avatars'; renderProfile(); },
+  'pr-tab-friends'() { profileTab = 'friends'; renderProfile(); },
   'pick-avatar'(el) {
     const a = avById(el.dataset.id);
     if (!avatarUnlocked(a)) { AudioSys.sfx('error'); toast('LOCKED', 'Unlock: ' + avatarLockText(a), '#ff3b5c'); return; }
@@ -3656,7 +3660,8 @@ function renderProfile() {
   $('pr-stats').innerHTML = stats.map(([k, v]) => `<div class="s"><label>${k}</label><b>${v}</b></div>`).join('');
   $('pr-tab-badges').classList.toggle('on', profileTab === 'badges');
   $('pr-tab-avatars').classList.toggle('on', profileTab === 'avatars');
-  if (profileTab === 'avatars') {
+  $('pr-tab-friends').classList.toggle('on', profileTab === 'friends');
+  if (profileTab === 'friends') { $('pr-list').innerHTML = '<div class="fr-box"></div>'; frRender(); frLoad(); } else if (profileTab === 'avatars') {
     $('pr-list').innerHTML = `<div class="av-grid">${AVATARS.map(a => {
       const ok = avatarUnlocked(a), sel = save.avatar === a.id;
       return `<button class="av ${sel ? 'sel' : ''} ${ok ? '' : 'locked'}" data-action="pick-avatar" data-id="${a.id}" ${ok ? '' : 'aria-disabled="true"'}>
@@ -4387,7 +4392,68 @@ async function rankSubmit() {
   } catch (e) { /* sin conexión o límite: se ignora, el juego sigue */ }
 }
 
-window.NS_BUILD = 'bf9cdd8a';
+/* =====================================================================
+   v13: AMIGOS ONLINE (Supabase) — código de amigo + lista, en PROFILE y FRIENDS
+   ===================================================================== */
+let frData = null, frCode = null, frMsg = '', frBusy = false;
+const FR_ERR = { bad_code: 'Friend code not found. Check it and try again.', self: "That's your own code.", limit: 'Your friend list is full (100).', bad_auth: 'This device could not be verified.' };
+const frEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function frLink() { return location.origin + location.pathname + '?friend=' + frCode; }
+function frHTML() {
+  const mine = frCode
+    ? `<div class="fr-mine"><span>YOUR FRIEND CODE</span><b>${frEsc(frCode)}</b><button class="btn sm ghost" data-action="fr-copy" data-what="code">COPY CODE</button><button class="btn sm ghost" data-action="fr-copy" data-what="link">COPY INVITE LINK</button></div>`
+    : `<p class="subnote">${frData === 'err' ? 'Could not reach the server. Check your connection.' : 'Loading…'}</p>`;
+  const add = `<div class="fr-add"><input class="fr-input" maxlength="12" placeholder="FRIEND CODE" autocomplete="off" spellcheck="false"><button class="btn sm primary" data-action="fr-add">ADD FRIEND</button></div><p class="fr-msg" role="status">${frEsc(frMsg)}</p>`;
+  let list = '';
+  if (Array.isArray(frData)) {
+    list = frData.length ? frData.map(f => `<div class="fr-row"><span class="fr-name">${frEsc(cleanNickname(f.name))}</span><span class="fr-sc">${f.best != null ? fmt(f.best) + ' pts' : '—'}</span><span class="fr-car">${frEsc((CARS.find(c => c.id === f.car) || {}).name || '')}${f.daily != null ? ' · daily ' + fmt(f.daily) : ''}</span><button class="btn sm ghost" data-action="fr-remove" data-code="${frEsc(f.code)}" aria-label="Remove friend">✕</button></div>`).join('')
+      : '<p class="subnote">No friends yet. Share your code or paste a friend\'s code above.</p>';
+  }
+  return `${mine}${add}<div class="fr-list">${list}</div>`;
+}
+function frRender() {
+  document.querySelectorAll('.fr-box').forEach(b => {
+    const keep = b.querySelector('.fr-input'), v = keep ? keep.value : '';
+    b.innerHTML = frHTML();
+    if (v) b.querySelector('.fr-input').value = v;
+  });
+}
+async function frLoad() {
+  if (frBusy) return; frBusy = true; frRender();
+  try {
+    frCode = await withTimeout(rpc('ns_friend_code', { ...netIdentity(), p_name: cleanNickname(save.nickname) }), 6000);
+    frData = await withTimeout(rpc('ns_friends', netIdentity()), 6000);
+  } catch (e) { frData = 'err'; }
+  frBusy = false; frRender();
+}
+async function frAdd(code) {
+  code = String(code || '').trim();
+  if (!code) { frMsg = 'Enter a friend code first.'; frRender(); return; }
+  try {
+    const r = await withTimeout(rpc('ns_add_friend', { ...netIdentity(), p_code: code }), 6000);
+    frMsg = `${cleanNickname(r.name)} added to your friends!`; toast('🤝 FRIEND ADDED', cleanNickname(r.name), '#00f0ff');
+    frData = await withTimeout(rpc('ns_friends', netIdentity()), 6000); frRender();
+    document.querySelectorAll('.fr-input').forEach(i => { i.value = ''; });
+  } catch (e) { frMsg = FR_ERR[e.code] || 'Could not add. Check your connection.'; frRender(); }
+}
+async function frRemove(code) {
+  try { await withTimeout(rpc('ns_remove_friend', { ...netIdentity(), p_code: code }), 6000); frData = await withTimeout(rpc('ns_friends', netIdentity()), 6000); frMsg = ''; } catch (e) { frMsg = 'Could not remove. Try again.'; }
+  frRender();
+}
+async function frCopy(what) {
+  const text = what === 'link' ? frLink() : frCode; if (!text) return;
+  try { await navigator.clipboard.writeText(text); frMsg = what === 'link' ? 'Invite link copied!' : 'Code copied!'; }
+  catch (e) { frMsg = 'Copy failed. Your code is ' + frCode; }
+  frRender();
+}
+(function frIncoming() {
+  const q = new URLSearchParams(location.search).get('friend');
+  if (!q) return;
+  history.replaceState(null, '', location.pathname);
+  setTimeout(() => { frMsg = ''; frAdd(q); }, 2500);
+})();
+
+window.NS_BUILD = '0426aa58';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

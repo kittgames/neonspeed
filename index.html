@@ -423,6 +423,23 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 .rk-car{color:#9aa6c8;font-size:11px}
 .rk-sc{font-family:'Orbitron';font-weight:700;color:#7ff6ff}
 @media (max-width:520px){.rk-car{display:none}.rk-row{grid-template-columns:40px 1fr auto}}
+
+/* AMIGOS ONLINE */
+.fr-box{display:flex;flex-direction:column;gap:10px;text-align:left}
+.fr-mine{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(0,240,255,.08);border:1px solid rgba(0,240,255,.4)}
+.fr-mine span{font-size:11px;color:#9aa6c8;letter-spacing:.1em;width:100%}
+.fr-mine b{font-family:'Orbitron';font-size:22px;letter-spacing:.12em;color:#7ff6ff;margin-right:auto}
+.fr-add{display:flex;gap:8px}
+.fr-add input{flex:1;min-width:0;text-transform:uppercase;letter-spacing:.12em;font-family:'Orbitron';margin:0!important}
+.fr-msg{min-height:18px;margin:0!important;font-size:13px;color:#ffd23f}
+.fr-list{display:flex;flex-direction:column;gap:4px;max-height:34vh;overflow-y:auto}
+.fr-row{display:grid;grid-template-columns:1fr auto auto;grid-template-areas:"n s x" "c c x";gap:0 10px;align-items:center;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.05)}
+.fr-name{grid-area:n;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr-sc{grid-area:s;font-family:'Orbitron';font-weight:700;color:#7ff6ff;font-size:13px}
+.fr-car{grid-area:c;color:#9aa6c8;font-size:11px}
+.fr-row .btn{grid-area:x;padding:4px 10px}
+.fr-input{background:#030819;color:#fff;border:1px solid #36546d;border-radius:10px;padding:11px 12px;font-size:15px}
+.fr-input::placeholder{color:#5f7188}
 </style>
 </head>
 <body>
@@ -478,7 +495,7 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
       </div>
     </div>
     <div class="pr-stats" id="pr-stats"></div>
-    <div class="tabs"><button class="tab on" data-action="pr-tab-badges" id="pr-tab-badges">BADGES</button><button class="tab" data-action="pr-tab-avatars" id="pr-tab-avatars">AVATARS</button></div>
+    <div class="tabs"><button class="tab on" data-action="pr-tab-badges" id="pr-tab-badges">BADGES</button><button class="tab" data-action="pr-tab-avatars" id="pr-tab-avatars">AVATARS</button><button class="tab" data-action="pr-tab-friends" id="pr-tab-friends">FRIENDS</button></div>
     <div class="list" id="pr-list"></div>
     <button class="btn ghost" data-action="profile-back">BACK</button>
   </div>
@@ -612,11 +629,12 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
 <dialog id="friends-dialog" class="friend-modal" aria-labelledby="friends-title">
   <h2 id="friends-title">FRIENDS & RIVALS</h2>
   <p>Race, share your score, and give a friend something to chase.</p>
+  <label>ONLINE FRIENDS</label><div class="fr-box"></div>
   <label for="racer-name">YOUR RACER NAME</label><input id="racer-name" maxlength="20" autocomplete="nickname" placeholder="RACER">
   <label for="friend-code">ACCEPT A CHALLENGE</label><textarea id="friend-code" maxlength="4096" placeholder="Paste a challenge link or NS6- code" spellcheck="false"></textarea>
   <p id="friend-error" role="status"></p><p id="friend-preview"></p>
   <div class="modal-actions"><button class="btn primary sm" id="friend-start" data-action="accept-challenge" disabled>ACCEPT & RACE</button><button class="btn ghost sm" data-action="preview-challenge">CHECK CODE</button><button class="btn ghost sm" data-action="close-friends">BACK</button></div>
-  <p>Same car and upgrades for both players. Traffic varies. These are friendly, unverified scores — no online leaderboard.</p>
+  <p>Same car and upgrades for both players. Traffic varies. Challenge scores are friendly and unverified. See the RANKING screen for the online leaderboard.</p>
   <label>CAR BETS · ONLINE</label><p>Bet a car from the game over screen. Got a bet code? Enter it here.</p><div class="modal-actions"><input id="bet-code" maxlength="80" placeholder="Bet code or link" style="flex:1;min-width:160px"><button class="btn gold sm" data-action="bet-code">OPEN BET</button></div><div id="bet-list"></div>
   <label>RECENT CHALLENGES · THIS DEVICE</label><div id="friend-history"></div>
 </dialog>
@@ -751,15 +769,15 @@ body.touch #drive-coach{bottom:calc(220px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=e52928e9a9'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=d716d1e761'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 17192448;
-  fetch('game.js?v=e52928e9a9').then(function (r) {
+  var TOTAL = 17197034;
+  fetch('game.js?v=d716d1e761').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
