@@ -620,6 +620,77 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
 .ms-head.world.here{color:#3dff8a}
 .ms-head span{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;letter-spacing:.04em;color:#9aa6c8;text-transform:none}
 .card.mission.locked{opacity:.45}
+
+/* ===== v20: MODO RACE ===== */
+#menu.alt-b .ab-col .btn.ab-race{position:relative;height:7.5cqh;font-style:italic;font-weight:900;color:#1a1100;background:linear-gradient(90deg,#ffd23f,#ff9f1c);border:none;box-shadow:0 0 2cqh rgba(255,190,40,.55)}
+#menu.alt-b .ab-col .btn.ab-race span{position:absolute;right:.8cqh;top:.6cqh;font-size:1cqh;font-style:normal;letter-spacing:.08em;background:#ff2bd6;color:#fff;padding:.2cqh .6cqh;border-radius:.6cqh}
+@media (max-aspect-ratio:1/1),(orientation:landscape) and (max-height:520px),(pointer:coarse) and (orientation:landscape) and (min-height:521px){
+  #menu.alt-b .ab-col .btn.ab-play.ab-play{grid-column:1/2}
+  #menu.alt-b .ab-col .btn.ab-race{grid-column:2/3;height:auto!important;min-height:0!important;align-self:stretch;padding:0 8px!important;font-size:22px;letter-spacing:.1em;flex-direction:row}
+  #menu.alt-b .ab-col .btn.ab-race::before{content:'🏁';position:static!important;transform:none!important;font-size:20px;margin-right:6px;font-style:normal}
+  #menu.alt-b .ab-col .btn.ab-race span{font-size:9px;top:6px;right:8px;padding:1px 5px;border-radius:5px}
+}
+@media (max-aspect-ratio:1/1) and (pointer:fine){#menu.alt-b .ab-col .btn.ab-race{font-size:2.6cqh}}
+body.race-mode .run-goal,body.race-mode #heat,body.race-mode #chase,body.race-mode .hud-right .stat:nth-child(2){display:none!important}
+#racehud,#racestand{display:none}
+body.race-mode #racehud{display:flex;position:absolute;left:50%;top:max(12px,env(safe-area-inset-top));transform:translateX(-50%);align-items:center;gap:12px;padding:6px 14px 6px 8px;background:rgba(5,8,20,.72);border:1px solid rgba(255,59,92,.7);border-radius:14px;box-shadow:0 0 18px rgba(255,59,92,.35);z-index:3;pointer-events:none}
+body.race-mode #racehud.ok{border-color:rgba(61,255,138,.75);box-shadow:0 0 18px rgba(61,255,138,.35)}
+#racehud .rh-p{display:flex;align-items:baseline;font-family:'Orbitron',sans-serif;font-style:italic;font-weight:900;line-height:1}
+#racehud .rh-p b{font-size:34px;color:#ff3b5c;text-shadow:0 0 12px rgba(255,59,92,.7)}
+#racehud.ok .rh-p b{color:#3dff8a;text-shadow:0 0 12px rgba(61,255,138,.7)}
+#racehud .rh-p small{font-size:14px;color:#9aa6c8;margin-left:2px}
+#racehud .rh-r{display:flex;flex-direction:column;gap:4px;min-width:150px}
+#racehud .rh-t{display:flex;justify-content:space-between;font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.08em;color:#eaf6ff}
+#racehud .rh-t span:last-child{color:#ffd23f}
+#racehud .rh-bar{height:6px;background:rgba(255,255,255,.12);border-radius:3px;overflow:hidden}
+#racehud .rh-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#00f0ff,#ffd23f);border-radius:3px}
+#racehud .rh-need{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;letter-spacing:.06em;color:#9aa6c8}
+body.race-mode #combo{margin-top:78px}
+body.race-mode #racestand{display:flex;flex-direction:column;gap:3px;position:absolute;left:max(12px,env(safe-area-inset-left));top:120px;width:170px;pointer-events:none;z-index:2}
+.rs-row,.rb-row{display:flex;align-items:center;gap:8px;padding:4px 8px;background:rgba(5,8,20,.66);border-left:3px solid rgba(0,240,255,.5);border-radius:6px;font-family:'Orbitron',sans-serif;font-size:11px;color:#eaf6ff}
+.rs-row b,.rb-row b{width:18px;color:#9aa6c8}
+.rs-row span,.rb-row span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rs-row i,.rb-row i{font-style:normal;color:#9aa6c8;font-size:10px}
+.rs-row.top,.rb-row.top{border-left-color:#ffd23f}
+.rs-row.top b,.rb-row.top b{color:#ffd23f}
+.rs-row.you,.rb-row.you{background:rgba(255,43,214,.28);border-left-color:#ff2bd6}
+#racehud .rh-need{white-space:nowrap}
+@media (max-width:600px){body.race-mode #racehud{top:calc(max(12px,env(safe-area-inset-top)) + 62px)}body.race-mode #racestand{top:calc(max(12px,env(safe-area-inset-top)) + 136px);width:132px}.rs-row{font-size:10px;padding:3px 7px}#racehud .rh-r{min-width:130px}#racehud .rh-p b{font-size:28px}#racehud .rh-need{font-size:10px}}
+#racepre .rp-hero,#raceres .rr-hero{text-align:center;display:flex;flex-direction:column;gap:4px;align-items:center}
+#racepre .rp-hero small,#raceres .rr-hero small{font-family:'Orbitron',sans-serif;font-size:12px;letter-spacing:.2em;color:#ff7ae6}
+#racepre .rp-hero b{font-family:'Orbitron',sans-serif;font-style:italic;font-weight:900;font-size:30px;color:#ffd23f;text-shadow:0 0 16px rgba(255,210,63,.5)}
+.rp-rules{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.rp-rules li{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:rgba(0,240,255,.06);border:1px solid rgba(0,240,255,.25);border-radius:10px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:15px;color:#dfe9ff;line-height:1.25}
+.rp-rules li em{font-style:normal;font-size:18px}
+.rp-meta{display:flex;justify-content:space-between;font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.08em;color:#9aa6c8}
+.rp-meta b{color:#00f0ff}
+.rr-title{font-family:'Orbitron',sans-serif;font-style:italic;font-weight:900;font-size:34px;letter-spacing:.06em}
+.rr-title.win{color:#ffd23f;text-shadow:0 0 18px rgba(255,210,63,.6)}
+.rr-title.lose{color:#ff3b5c;text-shadow:0 0 18px rgba(255,59,92,.6)}
+#rr-pos{font-family:'Orbitron',sans-serif;font-style:italic;font-weight:900;font-size:64px;line-height:1;color:#fff}
+.rr-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.rr-stats div{display:flex;flex-direction:column;align-items:center;padding:8px 4px;background:rgba(0,240,255,.06);border:1px solid rgba(0,240,255,.22);border-radius:10px}
+.rr-stats label{font-family:'Orbitron',sans-serif;font-size:9px;letter-spacing:.1em;color:#9aa6c8}
+.rr-stats b{font-family:'Orbitron',sans-serif;font-size:17px;color:#eaf6ff}
+.rr-stats b.yellow{color:#ffd23f}
+#rr-board{display:flex;flex-direction:column;gap:3px}
+.rr-btns{display:flex;gap:10px}.rr-btns .btn{flex:1}
+/* v21: gasolina */
+#racehud .rh-fuel{display:flex;align-items:center;gap:6px;font-family:'Orbitron',sans-serif;font-size:11px;color:#eaf6ff}
+#racehud .rh-fuel span{font-size:12px}
+#racehud .rh-fbar{flex:1;height:6px;background:rgba(255,255,255,.12);border-radius:3px;overflow:hidden}
+#racehud .rh-fbar i{display:block;height:100%;width:100%;background:#3dff8a;border-radius:3px;transition:background .3s}
+#racehud[data-fuel="mid"] .rh-fbar i{background:#ffd23f}
+#racehud[data-fuel="low"] .rh-fbar i{background:#ff3b5c;animation:v21blink .6s steps(2) infinite}
+#racehud[data-fuel="low"] #rh-fuelp{color:#ff3b5c}
+#racehud #rh-fuelp{min-width:34px;text-align:right}
+@keyframes v21blink{50%{opacity:.35}}
+#pitfx{display:none}
+body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;gap:8px;position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);padding:14px 26px;background:rgba(5,8,20,.8);border:1px solid #ffd23f;border-radius:16px;box-shadow:0 0 24px rgba(255,210,63,.4);pointer-events:none;z-index:3}
+#pitfx b{font-family:'Orbitron',sans-serif;font-style:italic;font-weight:900;font-size:26px;letter-spacing:.08em;color:#ffd23f;text-shadow:0 0 12px rgba(255,210,63,.6)}
+#pitfx .pf-bar{width:220px;height:10px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden}
+#pitfx .pf-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffd23f,#3dff8a)}
+#pitfx small{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.1em;color:#9aa6c8}
 </style>
 </head>
 <body>
@@ -643,6 +714,7 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
     </div>
     <div class="ab-col">
       <button class="btn primary big ab-play" data-action="play">PLAY</button>
+      <button class="btn ab-race" data-action="race">RACE<span>NEW</span></button>
       <button class="btn ghost" data-action="garage">GARAGE</button>
       <button class="btn ghost" data-action="profile">PROFILE</button>
       <button class="btn ghost" data-action="worlds">WORLDS<span id="menu-world">NEON CITY</span></button>
@@ -678,6 +750,32 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
     <div class="tabs"><button class="tab on" data-action="pr-tab-badges" id="pr-tab-badges">BADGES</button><button class="tab" data-action="pr-tab-avatars" id="pr-tab-avatars">AVATARS</button><button class="tab" data-action="pr-tab-friends" id="pr-tab-friends">FRIENDS</button></div>
     <div class="list" id="pr-list"></div>
     <button class="btn ghost" data-action="profile-back">BACK</button>
+  </div>
+</div>
+
+
+<!-- RACE (v20) -->
+<div id="racepre" class="screen dim">
+  <div class="panel sheet">
+    <div class="rp-hero"><small>NEW MODE</small><b>RACE</b><small id="rp-world">NEON CITY</small></div>
+    <ul class="rp-rules">
+      <li><em>🏁</em><span>You start <b>LAST (P50)</b>. 3 stages of about 2 minutes against 49 rivals. No traffic: the rivals are the traffic.</span></li>
+      <li><em>🥉</em><span>Cross every checkpoint in the <b>TOP 3</b> or you are eliminated.</span></li>
+      <li><em>⚡</em><span>Rivals use nitro and block you. Follow one closely to catch his <b>slipstream</b> and refill nitro. Bumping costs speed.</span></li>
+      <li><em>⛽</em><span>Fuel runs out with distance (nitro burns more). One station per stage: keep RIGHT to pit for 3 s. Fuel cans on the road give +15%. Every bump or crash costs fuel.</span></li>
+      <li><em>🪙</em><span>Coins for every stage cleared, plus a podium bonus: 1st 1,500 · 2nd 900 · 3rd 600.</span></li>
+    </ul>
+    <div class="rp-meta"><span>CAR · <b id="rp-car">Red Sport</b></span><span id="rp-best">NOT RACED YET</span></div>
+    <button class="btn primary big" data-action="race-start">START RACE</button>
+    <button class="btn ghost" data-action="race-back">BACK</button>
+  </div>
+</div>
+<div id="raceres" class="screen dim">
+  <div class="panel sheet">
+    <div class="rr-hero"><div id="rr-title" class="rr-title">VICTORY!</div><div id="rr-pos">P1</div><small id="rr-sub"></small></div>
+    <div class="rr-stats"><div><label>STAGES</label><b id="rr-stages">0/3</b></div><div><label>OVERTAKES</label><b id="rr-over">0</b></div><div><label>TOP KM/H</label><b id="rr-kmh">0</b></div><div><label>COINS</label><b id="rr-coins" class="yellow">+0</b></div></div>
+    <div id="rr-board"></div>
+    <div class="rr-btns"><button class="btn primary" data-action="race-retry">RACE AGAIN</button><button class="btn ghost" data-action="menu">MENU</button></div>
   </div>
 </div>
 
@@ -794,6 +892,7 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
       <button class="icon-btn" data-action="pause" aria-label="Pause">❚❚</button>
     </div>
   </div>
+  <div id="racehud"><div class="rh-p"><b id="rh-pos">P20</b><small id="rh-of">/50</small></div><div class="rh-r"><div class="rh-t"><span id="rh-stage">STAGE 1/3</span><span id="rh-left">6.5 KM</span></div><div class="rh-bar"><i id="rh-fill"></i></div><div class="rh-fuel"><span>⛽</span><div class="rh-fbar"><i id="rh-fuel"></i></div><b id="rh-fuelp">100%</b></div><div class="rh-need" id="rh-need">TOP 3 AT THE CHECKPOINT</div></div></div><div id="racestand"></div><div id="pitfx"><b>REFUELING</b><div class="pf-bar"><i id="pf-fill"></i></div><small id="pf-sub">RIVALS ARE PASSING</small></div>
   <div class="hud-center">
     <div class="combo" id="combo"><div class="combo-x" id="h-combo">×1</div><div class="combo-bar"><i id="h-combo-bar"></i></div><div class="combo-l">COMBO</div></div>
     <div id="chase"><div class="ch-top"><span>🚨</span><span id="chase-msg">LOSE THE COPS</span><b id="chase-t">20s</b></div><div class="ch-track"><i id="chase-fill"></i></div><div class="ch-lbl"><span>CAUGHT</span><span>ESCAPE</span></div></div>
@@ -963,15 +1062,15 @@ body.touch .hud-bottom{bottom:calc(26px + var(--sb))}
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=9fe6542e4b'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=095194c163'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10303736;
-  fetch('game.js?v=9fe6542e4b').then(function (r) {
+  var TOTAL = 10345973;
+  fetch('game.js?v=095194c163').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
