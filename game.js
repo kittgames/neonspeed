@@ -6132,8 +6132,8 @@ function inboxHTML() {
   const st = pushStatus();
   const pushLine = st === 'on' ? `<div class="ib-push on">🔔 Notifications on <button class="btn sm ghost" data-action="push-off">TURN OFF</button></div>`
     : st === 'denied' ? `<div class="ib-push">🔕 Notifications are blocked in your browser settings for this site.</div>`
-    : st === 'unsupported' ? '' : st === 'ios' ? `<div class="ib-push">🔔 To get notifications on iPhone/iPad, add the game to your Home Screen (Share → Add to Home Screen).</div>`
-    : `<div class="ib-push">🔔 Get notified when friends add, challenge or beat you <button class="btn sm primary" data-action="push-yes">TURN ON</button></div>`;
+    : st === 'unsupported' ? '' : st === 'ios' ? `<div class="ib-push">🔔 iPhone/iPad: add the game to your Home Screen to get notifications <button class="btn sm primary" data-action="push-help">HOW</button></div>`
+    : `<div class="ib-push">🔔 Get notified when friends add, challenge or beat you <span><button class="btn sm ghost" data-action="push-help">HOW</button> <button class="btn sm primary" data-action="push-yes">TURN ON</button></span></div>`;
   const rows = inbox.slice(0, 8).map(n => `<div class="ib-row${n.read ? '' : ' new'}"${n.url && n.url !== './' ? ` data-action="inbox-go" data-url="${frEsc(n.url)}"` : ''}><span class="ib-ic">${INBOX_IC[n.kind] || '🔔'}</span><div><b>${frEsc(n.title.replace(/^\S+\s/, ''))}</b><small>${frEsc(n.body)}</small></div><i>${inboxAgo(n.at)}</i></div>`).join('');
   return pushLine + (rows ? `<div class="ib-list">${rows}</div>` : '');
 }
@@ -6196,7 +6196,64 @@ Object.assign(actions, {
 });
 setTimeout(() => inboxRefresh(), 2500);
 
-window.NS_BUILD = '94d87287';
+/* v25: ventana de bienvenida con instrucciones (avisos + instalar en la pantalla de inicio) */
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; if ($('pa-install')) $('pa-install').hidden = false; });
+window.addEventListener('appinstalled', () => { deferredInstall = null; toast('📲 APP INSTALLED', 'open Neon Speed from your home screen', '#3dff8a'); });
+const isAndroid = /Android/i.test(navigator.userAgent);
+const isMobile = isIOS || isAndroid;
+function pushIntroHTML() {
+  const st = pushStatus(), inst = isStandalone();
+  const step = (n, html) => `<li><span class="pi-n">${n}</span><div>${html}</div></li>`;
+  let steps = '';
+  if (st === 'ios') {
+    steps = step(1, 'Tap <b>Share</b> <span class="pi-ic">⬆️</span> in the Safari toolbar.')
+      + step(2, 'Scroll and choose <b>Add to Home Screen</b> <span class="pi-ic">➕</span>.')
+      + step(3, 'Open <b>Neon Speed</b> from the new icon on your home screen.')
+      + step(4, 'Tap <b>TURN ON</b> when this window appears there.');
+  } else if (st === 'denied') {
+    steps = step(1, 'Notifications are <b>blocked</b> for this site.')
+      + step(2, isMobile ? 'Open the browser menu <b>⋮</b> → <b>Settings</b> → <b>Site settings</b> → <b>Notifications</b> and allow this site.' : 'Click the <b>🔒</b> next to the address bar → <b>Notifications</b> → <b>Allow</b>.')
+      + step(3, 'Reload the game and open <b>FRIENDS</b>.');
+  } else {
+    let n = 1;
+    if (!inst && isAndroid) steps += step(n++, 'Install the app: tap <b>INSTALL</b> below, or the browser menu <b>⋮</b> → <b>Install app</b> / <b>Add to Home screen</b>.');
+    else if (!inst && !isMobile) steps += step(n++, 'Optional: install it from the <b>⊕</b> icon in the address bar to play in its own window.');
+    steps += step(n++, 'Tap <b>TURN ON</b> and allow notifications.');
+    steps += step(n++, 'Add friends in <b>FRIENDS</b> and challenge them with <b>⚔️</b>.');
+  }
+  const btnOn = st === 'off' ? '<button class="btn primary sm" data-action="push-intro-on">🔔 TURN ON</button>' : '';
+  const btnInst = !inst && !isIOS ? `<button class="btn ghost sm" id="pa-install" data-action="push-install"${deferredInstall ? '' : ' hidden'}>📲 INSTALL</button>` : '';
+  return `<div class="pa-card pa-intro">
+    <b>🔔 DON'T MISS A CHALLENGE</b>
+    <p>Get a notification when friends <b>add you</b>, <b>challenge you</b> or <b>beat your score</b>, even with the game closed.</p>
+    <ol class="pi-steps">${steps}</ol>
+    <div class="pa-btns">${btnOn}${btnInst}<button class="btn ghost sm" data-action="push-intro-later">${st === 'ios' || st === 'denied' ? 'GOT IT' : 'NOT NOW'}</button></div>
+    <button class="pi-never" data-action="push-intro-never">Don't show this again</button>
+  </div>`;
+}
+function pushIntro(force) {
+  const st = pushStatus();
+  if (!force) {
+    if (st === 'on' || st === 'unsupported' || save.pushIntroNever) return;
+    if (save.pushIntroAt && Date.now() - save.pushIntroAt < PUSH.ASK_GAP) return;
+    if (state !== 'menu' || document.querySelector('dialog[open]') || ($('pushask') && $('pushask').classList.contains('on'))) return;
+  }
+  save.pushIntroAt = Date.now(); persist();
+  let el = $('pushask');
+  if (!el) { el = document.createElement('div'); el.id = 'pushask'; document.body.appendChild(el); }
+  el.innerHTML = pushIntroHTML(); el.classList.add('on');
+}
+Object.assign(actions, {
+  'push-intro-on'() { $('pushask').classList.remove('on'); pushEnable(); },
+  async 'push-install'() { if (!deferredInstall) return; deferredInstall.prompt(); try { await deferredInstall.userChoice; } catch (e) {} deferredInstall = null; if ($('pa-install')) $('pa-install').hidden = true; },
+  'push-intro-later'() { $('pushask').classList.remove('on'); },
+  'push-intro-never'() { save.pushIntroNever = true; persist(); $('pushask').classList.remove('on'); },
+  'push-help'() { pushIntro(true); },
+});
+setTimeout(() => pushIntro(false), 3500);
+
+window.NS_BUILD = '52878129';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
