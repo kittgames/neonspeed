@@ -4234,6 +4234,7 @@ void main() {
 
 ;
 
+THREE.ColorManagement.enabled = false;
 (function () {
 'use strict';
 const $ = id => document.getElementById(id);
@@ -4870,7 +4871,7 @@ const std = o => track(bent(new THREE.MeshStandardMaterial(o)));
 const basic = o => track(bent(new THREE.MeshBasicMaterial(Object.assign({ toneMapped: false }, o))));
 
 /* ---------- Lights ---------- */
-const LK = Math.PI; /* r155+: luces físicas → compensar el factor PI del modo legacy */
+const LK = Math.PI; /* r155+: luces físicas, compensa el factor PI del modo legacy */
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6 * LK);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2 * LK);
@@ -4879,7 +4880,7 @@ sun.shadow.camera.near = 1; sun.shadow.camera.far = 160;
 sun.shadow.camera.left = -22; sun.shadow.camera.right = 22; sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
 sun.shadow.bias = -0.0006;
 scene.add(sun); scene.add(sun.target);
-const headSpot = new THREE.SpotLight(0xfff1d6, 0, 75, 0.42, 0.65, 1.2);
+const headSpot = new THREE.SpotLight(0xfff1d6, 0, 75, 0.42, 0.65, 0);
 headSpot.position.set(0, 1.2, -2); scene.add(headSpot); scene.add(headSpot.target);
 
 /* ---------- Sky dome (painted panoramas blended with the day/night cycle) ---------- */
@@ -5250,10 +5251,17 @@ const facadeShader = shader => {
   bendShader(shader);
   shader.uniforms.uTile = shader.__tile;
   shader.vertexShader = 'uniform vec2 uTile;\n' + shader.vertexShader.replace('#include <uv_vertex>', `
-#ifdef USE_UV
+#include <uv_vertex>
+#ifdef USE_INSTANCING
   vec3 isc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
   float wU = abs(normal.x) > 0.5 ? isc.z : isc.x;
-  vUv = ( uvTransform * vec3( uv * vec2(wU / uTile.x, isc.y / uTile.y), 1 ) ).xy;
+  vec2 tuv = uv * vec2(wU / uTile.x, isc.y / uTile.y);
+  #ifdef USE_MAP
+  vMapUv = ( mapTransform * vec3( tuv, 1 ) ).xy;
+  #endif
+  #ifdef USE_EMISSIVEMAP
+  vEmissiveMapUv = ( emissiveMapTransform * vec3( tuv, 1 ) ).xy;
+  #endif
 #endif`);
 };
 const FAC = TEX.facades.map((f, k) => {
@@ -5748,12 +5756,9 @@ const Post = (() => {
   const P = { enabled: true, level: 2, u: comp.uniforms, b: bright.uniforms };
   function make() {
     [main, A1, B1, A2, B2].forEach(t => t && t.dispose());
-    const isGL2 = renderer.capabilities.isWebGL2;
-    main = isGL2 && P.level >= 2 && THREE.WebGLMultisampleRenderTarget
-      ? new THREE.WebGLMultisampleRenderTarget(W, H, { format: THREE.RGBAFormat })
-      : new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
-    if (main.isWebGLMultisampleRenderTarget) main.samples = 4;
-    main.texture.colorSpace = THREE.SRGBColorSpace;
+    main = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, samples: P.level >= 2 ? 4 : 0 });
+    main.isXRRenderTarget = true; /* r187: tone mapping + sRGB en el shader, como en r128 */
+    main.texture.colorSpace = THREE.SRGBColorSpace; main.texture.internalFormat = 'RGBA8';
     const hw = Math.max(1, W >> 1), hh = Math.max(1, H >> 1), qw = Math.max(1, W >> 2), qh = Math.max(1, H >> 2);
     A1 = new THREE.WebGLRenderTarget(hw, hh, opts); B1 = new THREE.WebGLRenderTarget(hw, hh, opts);
     A2 = new THREE.WebGLRenderTarget(qw, qh, opts); B2 = new THREE.WebGLRenderTarget(qw, qh, opts);
@@ -6607,7 +6612,7 @@ function applyCycle(p) {
   cloudMat.opacity = 1 - night * 0.82;
   cloudMat.color.setRGB(1, 1, 1).lerp(skyMat.uniforms.horizon.value, 0.35 + night * 0.4);
   renderer.toneMappingExposure = lerp(1.05, 1.25, night);
-  headSpot.intensity = Quality.level >= 3 ? night * 2.6 * LK : 0;
+  headSpot.intensity = Quality.level >= 3 ? night * 2.6 * LK * 0.7 : 0;
   headPool.material.opacity = smooth(0.2, 0.7, night) * 0.5;
   MAT.tail.color.setRGB(lerp(0.6, 1.4, lampOn), 0.02, 0.05);
   // Storm dims the light, lightning flashes it, tunnels make it warm and enclosed
@@ -8054,30 +8059,48 @@ function worldUnlocked(w) {
   if (!w.unlock) return true;
   return (save.worldsOwned || []).includes(w.id) || playerLevel().level >= w.unlock.lvl;
 }
+// Carga de mundos: reintenta el script si la red falla y no da el mundo por listo hasta que todas sus
+// texturas están decodificadas y subidas a la GPU (antes se aplicaba con texturas a medias y suelos o
+// fachadas salían negros o sin textura un rato).
 function loadWorldPack(id) {
   if (worldPacks[id]) return Promise.resolve(worldPacks[id]);
   if (worldLoading[id]) return worldLoading[id];
-  worldLoading[id] = new Promise((res, rej) => {
+  const script = n => new Promise((res, rej) => {
+    if (window.NS_WORLDS && window.NS_WORLDS[id]) { res(window.NS_WORLDS[id]); return; }
     const s = document.createElement('script');
-    s.src = 'worlds/' + id + '.js?v=' + (window.NS_BUILD || '1');
-    s.onload = () => {
-      const raw = window.NS_WORLDS && window.NS_WORLDS[id]; if (!raw) { rej(new Error('pack')); return; }
-      const L = new THREE.TextureLoader();
-      const tex = (uri, rep) => { const t = L.load(uri); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; if (rep) t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
-      const pack = {
-        pano: raw.pano.map(p => { const t = L.load(p.uri); t.wrapS = THREE.MirroredRepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 4; return t; }),
-        hv: raw.pano.map(p => p.hv), vs: raw.pano.map(p => p.vspan),
-        haze: raw.haze.map(c => new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear()),
-        ads: raw.ads.map(u => tex(u)),
-        fac: raw.fac.map(f => ({ map: tex(f.day, true), emi: tex(f.emi, true), tile: new THREE.Vector2(f.tile[0], f.tile[1]) })),
-        music: raw.music,
-      };
-      worldPacks[id] = pack; res(pack);
-    };
-    s.onerror = () => { delete worldLoading[id]; rej(new Error('load')); };
+    s.src = 'worlds/' + id + '.js?v=' + (window.NS_BUILD || '1') + (n ? '&r=' + n : '');
+    s.onload = () => { s.remove(); const raw = window.NS_WORLDS && window.NS_WORLDS[id]; raw ? res(raw) : rej(new Error('pack')); };
+    s.onerror = () => { s.remove(); rej(new Error('load')); };
     document.head.appendChild(s);
-  });
+  }).catch(e => n < 2 ? new Promise(r => setTimeout(r, 900 * (n + 1))).then(() => script(n + 1)) : Promise.reject(e));
+  worldLoading[id] = script(0).then(raw => {
+    const L = new THREE.TextureLoader(), wait = [], all = [];
+    const ld = uri => { let t; wait.push(new Promise((ok, ko) => { t = L.load(uri, ok, undefined, () => ko(new Error('tex'))); })); all.push(t); return t; };
+    const tex = (uri, rep) => { const t = ld(uri); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; if (rep) t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+    const pack = {
+      pano: raw.pano.map(p => { const t = ld(p.uri); t.wrapS = THREE.MirroredRepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 4; return t; }),
+      hv: raw.pano.map(p => p.hv), vs: raw.pano.map(p => p.vspan),
+      haze: raw.haze.map(c => new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear()),
+      ads: raw.ads.map(u => tex(u)),
+      fac: raw.fac.map(f => ({ map: tex(f.day, true), emi: tex(f.emi, true), tile: new THREE.Vector2(f.tile[0], f.tile[1]) })),
+      music: raw.music, all,
+    };
+    const late = new Promise((_, ko) => setTimeout(() => ko(new Error('timeout')), 30000));
+    return Promise.race([Promise.all(wait), late]).then(() => {
+      all.forEach(t => { try { renderer.initTexture(t); } catch (e) {} }); // sube a la GPU ya, sin tirón al empezar
+      if (window.NS_WORLDS) delete window.NS_WORLDS[id]; // libera el texto base64 del paquete
+      worldPacks[id] = pack; delete worldLoading[id]; return pack;
+    }, e => { all.forEach(t => t.dispose()); throw e; });
+  }).catch(e => { delete worldLoading[id]; throw e; });
   return worldLoading[id];
+}
+// Libera de la GPU los mundos que ya no se usan (en móvil, acumular Tokio + Miami pasaba de 250 MB)
+function dropWorldPacks(keep) {
+  Object.keys(worldPacks).forEach(k => {
+    if (k === 'neon' || k === keep) return;
+    (worldPacks[k].all || []).forEach(t => t.dispose());
+    delete worldPacks[k];
+  });
 }
 // Ground for the city: concrete plazas, kerbs and tactile paving instead of grass
 const cityGroundTex = canvasTex(1024, 1024, (x, w, h) => {
@@ -8164,7 +8187,10 @@ function setWorld(id) {
   const w = worldById(id);
   if (!worldUnlocked(w)) return Promise.reject(new Error('locked'));
   save.world = w.id; persist();
-  return loadWorldPack(w.id).then(pack => { applyWorldNow(w.id, pack); return w; });
+  return loadWorldPack(w.id).then(pack => {
+    if (save.world !== w.id) return w; // el jugador eligió otro mundo mientras cargaba: no mezclar
+    applyWorldNow(w.id, pack); dropWorldPacks(w.id); return w;
+  });
 }
 function renderWorlds() {
   const sel = save.world || 'neon', lv = playerLevel().level;
@@ -10264,6 +10290,27 @@ function mvImport() {
 })();
 try { if (sessionStorage.getItem('ns_moved')) { sessionStorage.removeItem('ns_moved'); setTimeout(() => toast('PROGRESS MOVED', 'welcome to neonspeed.github.io', '#3dff8a'), 1500); } } catch (e) {}
 
+/* ---------- Carga del mundo guardado y pérdida del contexto 3D ---------- */
+// Si el mundo elegido aún está cargando (al abrir el juego), la carrera espera a que esté listo
+// en lugar de empezar en Neon City y cambiar los edificios a mitad de partida.
+{
+  const _startRun = startRun;
+  let waiting = false;
+  startRun = function (...a) {
+    const id = save.world, p = id && id !== 'neon' && !worldPacks[id] && worldLoading[id];
+    if (!p) return _startRun.apply(this, a);
+    if (waiting) return;
+    waiting = true;
+    toast('LOADING WORLD', worldById(id).name + '…', '#00f0ff');
+    const go = () => { waiting = false; startRun(...a); };
+    p.then(go, () => { waiting = false; save.world = 'neon'; toast('WORLD NOT LOADED', 'Racing in Neon City. Check your connection.', '#ff3b5c'); _startRun.apply(this, a); });
+  };
+}
+// En móvil el sistema puede quitarle la GPU al juego (poca memoria, cambio de app). Three.js recupera
+// la escena solo; avisamos para que no parezca un fallo de carga.
+renderer.domElement.addEventListener('webglcontextlost', () => { toast('GRAPHICS PAUSED', 'Restoring the 3D scene…', '#ffd23f'); });
+renderer.domElement.addEventListener('webglcontextrestored', () => { toast('GRAPHICS RESTORED', '', '#00f0ff'); });
+
 /* =====================================================================
    v24: AVISOS (push + buzón)
    · Service worker (sw.js) recibe los push del servidor (Supabase → función ns-push).
@@ -10481,7 +10528,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '52878129';
+window.NS_BUILD = '14d605be';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
@@ -10508,7 +10555,7 @@ window.NeonSpeed = {
   get quality() { return Quality.level; }, get zones() { return Zones.list.map(z => z.type + '@' + Math.round(zz(z.start))); }, get weather() { return Weather; },
   setQuality(l) { Quality.level = l; Quality.locked = true; Quality.apply(); },
   get audio() { return { ready: AudioSys.ready, samples: AudioSys.buf ? Object.keys(AudioSys.buf) : [], music: Music.tracks ? Music.tracks.map(t => t.n + ':' + (t.el.paused ? 'paused' : 'playing') + ':' + t.vol.toFixed(2)) : null }; },
-  get drawCalls() { return renderer.info.render.calls; },
+  get drawCalls() { return renderer.info.render.calls; }, get texMem() { return renderer.info.memory.textures; },
   step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); },
   get police() { return police; }, startChase, get heli() { return heli; }, startHeli, get forkApi() { return { fork, startFork, forkSlot, get worldDist() { return worldDist; } }; }, get heatApi() { return { add: heatAdd, lv: heatLv, mul: heatMul, rb, startRB, get heat() { return run.heat; } }; }, setWorld, get WORLD() { return WORLD; }, openWorlds, applyTuning, perf, get P() { return P; }, rpc, betSync, openBetLink, get engineSynth() { return !!(AudioSys.eng && AudioSys.eng.wk); }, get save() { return save; }, checkBadgesLive, openProfile, renderProfile,
 };
