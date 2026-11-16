@@ -6036,7 +6036,167 @@ function mvImport() {
 })();
 try { if (sessionStorage.getItem('ns_moved')) { sessionStorage.removeItem('ns_moved'); setTimeout(() => toast('PROGRESS MOVED', 'welcome to neonspeed.github.io', '#3dff8a'), 1500); } } catch (e) {}
 
-window.NS_BUILD = '54751aeb';
+/* =====================================================================
+   v24: AVISOS (push + buzón)
+   · Service worker (sw.js) recibe los push del servidor (Supabase → función ns-push).
+   · El juego pide permiso en momentos útiles (al añadir amigo, al retar), nunca al cargar.
+   · Buzón dentro del juego para quien no active los avisos: insignia en FRIENDS y lista en el diálogo.
+   · Retos directos: enviar tu última partida a un amigo concreto (le llega aviso); si te supera, te avisa.
+   ===================================================================== */
+const PUSH = { VAPID: 'BPb7CCUYrOvDaucvy6nS0y2pkfY46Ebn8RaS7gF3iISxIhO-_oye5iKzesdtIyGi0l6pJXs0-vhnq-gy9SoIzks', ASK_GAP: 3 * 86400e3 };
+let swReg = null, inbox = [], inboxSeen = 0, challengeCid = null;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function u8key(b64) { const p = '='.repeat((4 - b64.length % 4) % 4), s = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); }
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  navigator.serviceWorker.register('sw.js').then(r => { swReg = r; pushResync(); }).catch(() => {});
+  navigator.serviceWorker.addEventListener('message', e => {
+    const m = e.data || {};
+    if (m.ns === 'push') { inboxRefresh(true); }
+    if (m.ns === 'nav' && m.url) { location.href = new URL(m.url, location.href).href; setTimeout(() => location.reload(), 60); }
+  });
+}
+function pushStatus() {
+  if (isIOS && !isStandalone()) return 'ios';
+  if (!pushSupported()) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  if (Notification.permission === 'granted' && save.pushOn) return 'on';
+  return 'off';
+}
+async function pushSubscribe() {
+  const reg = swReg || await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8key(PUSH.VAPID) });
+  const j = sub.toJSON();
+  await withTimeout(rpc('ns_push_subscribe', { ...netIdentity(), p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth }), 8000);
+  return sub;
+}
+async function pushEnable() {
+  const st = pushStatus();
+  if (st === 'ios') { pushIosHelp(); return false; }
+  if (st === 'unsupported') { toast('NOTIFICATIONS', 'not supported on this browser', '#ff7a2f'); return false; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('NOTIFICATIONS OFF', 'you can turn them on in FRIENDS', '#ff7a2f'); save.pushAsked = Date.now(); persist(); frRender(); return false; }
+    await pushSubscribe();
+    save.pushOn = true; persist(); frRender();
+    toast('🔔 NOTIFICATIONS ON', "we'll tell you when friends challenge or beat you", '#3dff8a');
+    return true;
+  } catch (e) { toast('NOTIFICATIONS', 'could not turn them on, try again', '#ff3b5c'); return false; }
+}
+async function pushDisable() {
+  try { const reg = swReg || await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription();
+    if (sub) { await withTimeout(rpc('ns_push_unsubscribe', { ...netIdentity(), p_endpoint: sub.endpoint }), 6000).catch(() => {}); await sub.unsubscribe(); } } catch (e) {}
+  save.pushOn = false; persist(); frRender();
+}
+// si ya estaban activados, renovar la suscripción en el servidor (cambian a veces)
+function pushResync() { if (save.pushOn && pushSupported() && Notification.permission === 'granted') pushSubscribe().catch(() => {}); }
+function pushIosHelp() {
+  pushAskShow('🔔 TURN ON NOTIFICATIONS', 'On iPhone and iPad, add the game to your Home Screen first: tap <b>Share</b> → <b>Add to Home Screen</b>. Open it from there and turn notifications on in FRIENDS.', false);
+}
+// pregunta propia antes del permiso del navegador, solo en momentos útiles
+function pushAsk(reason) {
+  const st = pushStatus();
+  if (st === 'on' || st === 'denied' || st === 'unsupported') return;
+  if (save.pushAsked && Date.now() - save.pushAsked < PUSH.ASK_GAP) return;
+  save.pushAsked = Date.now(); persist();
+  if (st === 'ios') { pushIosHelp(); return; }
+  pushAskShow('🔔 GET NOTIFIED?', reason + ' Turn on notifications and we will tell you when friends add you, challenge you or beat you.', true);
+}
+function pushAskShow(title, html, withBtn) {
+  let el = $('pushask');
+  if (!el) { el = document.createElement('div'); el.id = 'pushask'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="pa-card"><b>${title}</b><p>${html}</p><div class="pa-btns">${withBtn ? '<button class="btn primary sm" data-action="push-yes">TURN ON</button>' : ''}<button class="btn ghost sm" data-action="push-no">${withBtn ? 'NOT NOW' : 'OK'}</button></div></div>`;
+  el.classList.add('on');
+}
+/* ---------- buzón ---------- */
+const INBOX_IC = { friend: '🤝', challenge: '🏁', challenge_won: '😤', challenge_lost: '🛡️', bet_accepted: '⚔️', bet_won: '🏆', bet_lost: '😤', beat_daily: '📈', beat_free: '📈', beat_race: '👻' };
+async function inboxRefresh(fromPush) {
+  try {
+    const list = await withTimeout(rpc('ns_inbox_list', netIdentity()), 6000);
+    if (!Array.isArray(list)) return;
+    const newest = list.length ? list[0].id : 0;
+    const fresh = list.filter(n => !n.read && n.id > inboxSeen);
+    inbox = list;
+    if (inboxSeen && fresh.length && (state === 'menu' || fromPush)) { const n = fresh[0]; toast(n.title, n.body, '#c08bff'); }
+    inboxSeen = Math.max(inboxSeen, newest);
+    inboxBadge(); frRender();
+  } catch (e) {}
+}
+function inboxBadge() {
+  const n = inbox.filter(x => !x.read).length, b = $('m-fr-badge');
+  if (b) { b.style.display = n ? 'inline-block' : 'none'; b.textContent = n; }
+}
+function inboxHTML() {
+  const st = pushStatus();
+  const pushLine = st === 'on' ? `<div class="ib-push on">🔔 Notifications on <button class="btn sm ghost" data-action="push-off">TURN OFF</button></div>`
+    : st === 'denied' ? `<div class="ib-push">🔕 Notifications are blocked in your browser settings for this site.</div>`
+    : st === 'unsupported' ? '' : st === 'ios' ? `<div class="ib-push">🔔 To get notifications on iPhone/iPad, add the game to your Home Screen (Share → Add to Home Screen).</div>`
+    : `<div class="ib-push">🔔 Get notified when friends add, challenge or beat you <button class="btn sm primary" data-action="push-yes">TURN ON</button></div>`;
+  const rows = inbox.slice(0, 8).map(n => `<div class="ib-row${n.read ? '' : ' new'}"${n.url && n.url !== './' ? ` data-action="inbox-go" data-url="${frEsc(n.url)}"` : ''}><span class="ib-ic">${INBOX_IC[n.kind] || '🔔'}</span><div><b>${frEsc(n.title.replace(/^\S+\s/, ''))}</b><small>${frEsc(n.body)}</small></div><i>${inboxAgo(n.at)}</i></div>`).join('');
+  return pushLine + (rows ? `<div class="ib-list">${rows}</div>` : '');
+}
+function inboxAgo(t) { const s = (Date.now() - new Date(t).getTime()) / 1000; return s < 3600 ? Math.max(1, Math.round(s / 60)) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd'; }
+function inboxMarkRead() {
+  if (!inbox.some(n => !n.read)) return;
+  withTimeout(rpc('ns_inbox_read', netIdentity()), 6000).then(() => { inbox.forEach(n => { n.read = true; }); inboxBadge(); }).catch(() => {});
+}
+/* ---------- retos directos ---------- */
+async function sendChallenge(code, name) {
+  if (!lastResult || lastResult.score < 1) { frMsg = 'Play a run first: your last score is what you send.'; frRender(); return; }
+  try {
+    const r = await withTimeout(rpc('ns_send_challenge', { ...netIdentity(), p_code: code, p_challenge: encodeChallenge(lastResult), p_score: lastResult.score }), 6000);
+    frMsg = `Challenge sent to ${cleanNickname(r.name || name)}: beat ${fmt(lastResult.score)} pts!`;
+    toast('🏁 CHALLENGE SENT', cleanNickname(r.name || name), '#ff2bd6'); frRender(); renderShareFriends();
+    pushAsk('Your friend gets a notification now.');
+  } catch (e) { frMsg = e.code === 'too_fast' ? 'Too many challenges for now. Try later.' : 'Could not send the challenge. Check your connection.'; frRender(); }
+}
+function renderShareFriends() {
+  const box = $('share-friends'); if (!box) return;
+  if (!Array.isArray(frData) || !frData.length) { box.innerHTML = '<p class="subnote">Add friends in FRIENDS to challenge them directly.</p>'; return; }
+  box.innerHTML = frData.slice(0, 12).map(f => `<button class="btn sm ghost sf-btn" data-action="fr-challenge" data-code="${frEsc(f.code)}" data-name="${frEsc(f.name)}">⚔️ ${frEsc(cleanNickname(f.name))}</button>`).join('');
+}
+// entrada desde un aviso de reto: #challenge=...&cid=N
+(function () {
+  const hp = new URLSearchParams(location.hash.slice(1)), cid = hp.get('cid');
+  if (cid && /^\d+$/.test(cid)) challengeCid = +cid;
+  if (new URLSearchParams(location.search).get('friends')) { history.replaceState(null, '', location.pathname + location.hash); setTimeout(() => openFriends(), 1200); }
+})();
+/* ---------- integración ---------- */
+const _pbHTML = frHTML;
+frHTML = function () {
+  return `<div class="fr-inbox">${inboxHTML()}</div>` + _pbHTML().replace(/<button class="btn sm ghost" data-action="fr-remove" data-code="([^"]*)"/g,
+    '<button class="btn sm pink fr-ch" data-action="fr-challenge" data-code="$1" title="Challenge with your last score">⚔️</button>$&');
+};
+const _pbAdd = frAdd;
+frAdd = async function (code) { await _pbAdd(code); if (/added/.test(frMsg)) pushAsk('Your friend will see you added them.'); };
+const _pbOpen = openFriends;
+openFriends = function () { _pbOpen(); inboxRefresh().then(inboxMarkRead); };
+const _pbShare = openResultShare;
+openResultShare = function () { _pbShare(); renderShareFriends(); if (!Array.isArray(frData)) frLoad().then(renderShareFriends); };
+const _pbCap = captureResult;
+captureResult = function () {
+  _pbCap();
+  if (challengeCid && run.challenge && lastResult) {
+    const cid = challengeCid; challengeCid = null;
+    withTimeout(rpc('ns_challenge_result', { ...netIdentity(), p_cid: cid, p_score: lastResult.score }), 6000).catch(() => {});
+  }
+};
+const _pbMenu = goMenu;
+goMenu = function () { _pbMenu(); inboxRefresh(); };
+setInterval(() => { if (state === 'menu' && !document.hidden) inboxRefresh(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) inboxRefresh(); });
+Object.assign(actions, {
+  'push-yes'() { const el = $('pushask'); if (el) el.classList.remove('on'); pushEnable(); },
+  'push-no'() { const el = $('pushask'); if (el) el.classList.remove('on'); },
+  'push-off'() { pushDisable(); },
+  'fr-challenge'(el) { sendChallenge(el.dataset.code, el.dataset.name); },
+  'inbox-go'(el) { location.href = new URL(el.dataset.url, location.href).href; setTimeout(() => location.reload(), 60); },
+});
+setTimeout(() => inboxRefresh(), 2500);
+
+window.NS_BUILD = '94d87287';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

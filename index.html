@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<script>(function(){try{var h=new URLSearchParams(location.hash.slice(1)),m=h.get('lsmove');if(!m)return;h.delete('lsmove');var o=JSON.parse(decodeURIComponent(escape(atob(m))));var n=0;for(var k in o){if(localStorage.getItem(k)===null){localStorage.setItem(k,o[k]);n++;}}var r=h.toString();history.replaceState(null,'',location.pathname+location.search+(r?'#'+r:''));if(n)sessionStorage.setItem('ls_moved',String(n));}catch(e){}})();
+<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#05040f"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Neon Speed"><script>(function(){try{var h=new URLSearchParams(location.hash.slice(1)),m=h.get('lsmove');if(!m)return;h.delete('lsmove');var o=JSON.parse(decodeURIComponent(escape(atob(m))));var n=0;for(var k in o){if(localStorage.getItem(k)===null){localStorage.setItem(k,o[k]);n++;}}var r=h.toString();history.replaceState(null,'',location.pathname+location.search+(r?'#'+r:''));if(n)sessionStorage.setItem('ls_moved',String(n));}catch(e){}})();
 </script><style>
 :root{
   --cyan:#00f0ff; --pink:#ff2bd6; --yellow:#ffd23f; --green:#3dff8a; --red:#ff3b5c; --violet:#9b5cff;
@@ -699,6 +699,27 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
 .rg-row{display:flex;justify-content:space-between;gap:10px;padding:6px 10px;border-radius:8px;background:rgba(192,139,255,.12);border:1px solid rgba(192,139,255,.4);font-family:'Orbitron',sans-serif;font-size:11px;color:#e6d4ff}
 .rg-row i{font-style:normal;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px}
 .rg-row.win i{color:#3dff8a}.rg-row.lose i{color:#ff7a9a}
+/* v24: avisos */
+.fr-inbox{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.ib-push{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-radius:10px;background:rgba(192,139,255,.12);border:1px solid rgba(192,139,255,.4);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;color:#e6d4ff}
+.ib-push.on{background:rgba(61,255,138,.1);border-color:rgba(61,255,138,.4);color:#c9ffe0}
+.ib-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.ib-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:9px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.ib-row[data-action]{cursor:pointer}
+.ib-row.new{background:rgba(255,43,214,.12);border-color:rgba(255,43,214,.45)}
+.ib-row .ib-ic{font-size:20px}
+.ib-row div{flex:1;display:flex;flex-direction:column;min-width:0}
+.ib-row b{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.04em;color:#eaf6ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ib-row small{font-family:'Rajdhani',sans-serif;font-size:13px;color:#9aa6c8}
+.ib-row i{font-style:normal;font-family:'Orbitron',sans-serif;font-size:10px;color:#9aa6c8}
+.fr-ch{min-width:38px;padding:0 8px}
+.share-friends{display:flex;flex-wrap:wrap;gap:6px}
+#pushask{display:none;position:fixed;inset:0;z-index:60;background:rgba(3,4,16,.6);align-items:center;justify-content:center;padding:20px}
+#pushask.on{display:flex}
+#pushask .pa-card{max-width:380px;padding:18px 20px;border-radius:18px;background:#0b0920;border:1px solid rgba(192,139,255,.6);box-shadow:0 0 30px rgba(192,139,255,.35);display:flex;flex-direction:column;gap:10px;text-align:center}
+#pushask b{font-family:'Orbitron',sans-serif;font-size:18px;color:#ffd23f}
+#pushask p{margin:0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:16px;color:#dfe9ff;line-height:1.3}
+#pushask .pa-btns{display:flex;gap:10px;justify-content:center}
 </style>
 </head>
 <body>
@@ -726,7 +747,7 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
       <button class="btn ghost" data-action="garage">GARAGE</button>
       <button class="btn ghost" data-action="profile">PROFILE</button>
       <button class="btn ghost" data-action="worlds">WORLDS<span id="menu-world">NEON CITY</span></button>
-      <button class="btn ghost" data-action="friends">FRIENDS</button>
+      <button class="btn ghost" data-action="friends">FRIENDS<span class="badge" id="m-fr-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="ranking">RANKING<span id="menu-daily"></span></button>
       <button class="btn ghost" data-action="missions">MISSIONS<span class="badge" id="m-badge" style="display:none">0</span></button>
       <button class="btn ghost" data-action="settings">SETTINGS</button>
@@ -949,6 +970,7 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
   <p id="share-help"></p><label for="share-code">CHALLENGE</label><textarea id="share-code" readonly spellcheck="false"></textarea>
   <div class="modal-actions"><button class="btn primary sm" data-action="native-share">SHARE CHALLENGE</button><button class="btn ghost sm" data-action="copy-challenge" id="copy-challenge">COPY CODE</button><button class="btn pink sm" data-action="download-card">SAVE CARD</button><button class="btn ghost sm" data-action="close-share">BACK</button></div>
   <p id="share-status" role="status"></p>
+  <label>SEND TO A FRIEND · THEY GET A NOTIFICATION</label><div id="share-friends" class="share-friends"></div>
 </dialog>
 <dialog id="bet-dialog" class="friend-modal" aria-labelledby="bet-title">
   <div class="bet-hero">PINK SLIP · WINNER TAKES THE CAR</div>
@@ -1074,15 +1096,15 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=c898fc1a5f'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=9cd75431f7'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10365551;
-  fetch('game.js?v=c898fc1a5f').then(function (r) {
+  var TOTAL = 10376668;
+  fetch('game.js?v=9cd75431f7').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
