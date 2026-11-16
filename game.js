@@ -4751,7 +4751,7 @@ const RACE = {
   WARN: 900,
 };
 /* rivales: nitro, bloqueos y rebufo */
-const RN = { TOP: 0.975, SPREAD: 0.16, BOOST: 1.36, DRAIN: 25, REGEN: 4.2, SLIP: 7 };
+const RN = { TOP: 0.965, SPREAD: 0.16, BOOST: 1.36, DRAIN: 25, REGEN: 4.2, SLIP: 7 };
 const RIVAL_TAGS = ['NEO', 'KAI', 'VEX', 'RYU', 'LUX', 'JAX', 'ACE', 'REI', 'ZED', 'ONYX', 'NOVA', 'BLAZE', 'VOLT', 'AXEL', 'SORA', 'KAZE',
   'RONIN', 'VIPER', 'HEX', 'DRIFT', 'JINX', 'NYX', 'ORION', 'TAKA', 'MIRA', 'ZANE', 'KIRA', 'DASH', 'ECHO', 'FLUX', 'GHOST', 'HALO',
   'IRIS', 'JUNO', 'KOJI', 'LYNX', 'MAKO', 'NERO', 'OMEN', 'PIKE', 'RAVEN', 'SAGE', 'TORA', 'UMA', 'VOID', 'WREN', 'XENA', 'YUKI', 'ZORA'];
@@ -4860,7 +4860,7 @@ function raceInit() {
   player.x = raceBuildRivals();
   clearZones(); zoneRng = mulberry32(race.seed ^ 0x5bd1e995); extendZones();
   if (!race.cp) race.cp = buildCheckpoint();
-  raceRankAll(); race.startPos = race.pos; fuelInit(); race.pitK = -1;
+  raceRankAll(); race.startPos = race.pos; fuelInit(); race.pitK = -1; obsInit();
   document.body.classList.add('race-mode');
   setText('rh-stage', 'STAGE 1/' + RACE.STAGES);
 }
@@ -4868,7 +4868,7 @@ function raceCleanup() {
   race.active = false; race.over = false;
   race.rivals.forEach(rivalHide);
   if (race.cp) race.cp.root.visible = false;
-  fuelCleanup();
+  fuelCleanup(); obsCleanup(); race.obs = null;
   document.body.classList.remove('race-mode');
 }
 function rivalLaneFree(r, lane, ignorePlayer) {
@@ -4881,6 +4881,7 @@ function rivalLaneFree(r, lane, ignorePlayer) {
   if (!ignorePlayer && Math.abs(player.x - x) < 2.6 && pd - r.d < 16 && r.d - pd < 10) return false;
   if (ignorePlayer && Math.abs(player.x - x) < 2.6 && Math.abs(pd - r.d) < 7) return false;
   if (worksAhead(lane, pd - r.d) !== null) return false;
+  if (obsAhead(lane, r.d, 120, 'wreck flood puddle') !== null) return false;
   return true;
 }
 function updateRivals(dt) {
@@ -4911,6 +4912,7 @@ function updateRivals(dt) {
       }
     }
     if (r.pit) target = rivalPitTarget(r, target, dt);
+    else target *= rivalWater(r);
     r.target = target;
   }
   // 2) rivales visibles: seguir, adelantar, esquivar obras y al jugador
@@ -4926,7 +4928,7 @@ function updateRivals(dt) {
     if (!race.pit && r.d < pd && Math.abs(player.x - r.x) < 2.2) {
       const g = pd - r.d - P_HL - m.halfL; if (g < gap) { gap = g; aSpd = player.speed; aD = pd - P_HL - m.halfL; }
     }
-    const z = pd - r.d, wz = worksAhead(r.lane, z);
+    const z = pd - r.d, wz = worksAhead(r.lane, z), ob = obsAhead(r.lane, r.d, 110, r.model ? 'wreck flood puddle' : 'wreck flood');
     r.cool -= dt; r.gapAhead = gap;
     // bloqueo: si vienes más rápido por el carril de al lado, algunos se te cruzan
     if (state === 'playing' && !race.pit && !r.chg && r.cool <= 0 && r.blockCd <= 0 && wz === null && z < -8 && z > -34
@@ -4935,7 +4937,7 @@ function updateRivals(dt) {
       if (Math.abs(l - r.lane) === 1 && rivalLaneFree(r, l, true)) { r.chg = { from: r.x, to: LANES[l], t: 0 }; r.lane = l; r.cool = 1.4; r.blockCd = 7; r.blocking = 1.5; }
       else r.blockCd = 1;
     }
-    const blocked = (gap < 28 && aSpd < r.target - 0.5) || wz !== null;
+    const blocked = (gap < 28 && aSpd < r.target - 0.5) || wz !== null || ob !== null;
     if (blocked && !r.chg && r.cool <= 0) {
       const opts = [r.lane - 1, r.lane + 1].filter(l => l >= 0 && l < 4 && rivalLaneFree(r, l));
       if (opts.length) { const l = opts.sort((a, b) => (Math.abs(LANES[a] - player.x) < 2.2) - (Math.abs(LANES[b] - player.x) < 2.2))[0]; r.chg = { from: r.x, to: LANES[l], t: 0 }; r.lane = l; r.cool = 1.6; }
@@ -4943,6 +4945,7 @@ function updateRivals(dt) {
     }
     if (gap < 12) r.target = Math.min(r.target, aSpd - (gap < 5 ? 3 : 0));
     if (wz !== null && !r.chg && z - wz < 26) r.target = Math.min(r.target, 6);
+    { const w = obsAhead(r.lane, r.d, 24, 'wreck'); if (w !== null && !r.chg) r.target = Math.min(r.target, w < 8 ? 0 : 6); }
     r.aD = gap < 1e8 ? aD : null;
   }
   // 3) integración
@@ -5035,6 +5038,7 @@ function updateRace(dt) {
   if (run && run.heat) run.heat = 0;
   updateRivals(dt);
   updateFuel(dt);
+  updateObstacles(dt);
   const pd = player_d(), end = stageEnd(), zc = pd - end, cp = race.cp;
   cp.root.visible = zc > -440 && zc < 30;
   if (cp.root.visible) { cp.root.position.z = zc; cpLabel(race.stage === RACE.STAGES - 1 ? 'FINISH' : 'CHECKPOINT', race.stage === RACE.STAGES - 1 ? 'FINAL STAGE · TOP 3' : 'STAGE ' + (race.stage + 1) + ' · TOP 3 TO ADVANCE'); }
@@ -5127,7 +5131,7 @@ function updateRaceHUD() {
 }
 function raceFx() {
   if (!race.active) return;
-  fuelFx();
+  fuelFx(); obsFx();
   const n = todState.night;
   for (const r of race.rivals) {
     if (!r.model) continue;
@@ -5187,7 +5191,7 @@ Object.assign(actions, {
   restart() { startRun(); }, menu() { goMenu(); }, back() { goMenu(); },
 });
 const _rcPlay = actions.play; actions.play = function () { race.mode = false; _rcPlay(); };
-window.NSRace = { race, RACE, raceRankAll, get pd() { return player_d(); }, get FUEL() { return FUEL; }, stationD };
+window.NSRace = { get OBS() { return OBS; }, race, RACE, raceRankAll, get pd() { return player_d(); }, get FUEL() { return FUEL; }, stationD };
 
 /* =====================================================================
    v21: MODO RACE (fase 2) · GASOLINA
@@ -5200,7 +5204,7 @@ window.NSRace = { race, RACE, raceRankAll, get pd() { return player_d(); }, get 
 const FUEL = {
   PER_M: 100 / 6800, NITRO: 2.4, CAN: 15, CANS: 5, LOW: 25, PIT_T: 3,
   AT: 0.55, PIT_IN: 55, PIT_OUT: 175, BAY0: 20, BAY_GAP: 8, P_BAY: 64,
-  HIT: 3, CRASH: 8, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 27, ENTRY: 4.4,
+  HIT: 2, CRASH: 6, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 27, ENTRY: 4.4,
 };
 function stationD(k) { return (k + FUEL.AT) * RACE.STAGE_LEN; }
 function rivalPitTarget(r, target, dt) {
@@ -5447,6 +5451,212 @@ extendZones = function () {
     if (!moved) break;
   }
 };
+
+/* =====================================================================
+   v22: MODO RACE (fase 3) · OBSTÁCULOS
+   · Charcos: aquaplaning (pierdes algo de velocidad y el coche se va de lado)
+   · Inundación: tres carriles con agua y uno seco; por el agua vas lento
+   · Accidentes: coches siniestrados que cortan uno o dos carriles (choque = trompo)
+   Los rivales los ven y cambian de carril; si no pueden, también los sufren.
+   ===================================================================== */
+const OBS = { PUDDLES: 3, FLOODS: 1, WRECKS: 2, FLOOD_LEN: 46, FLOOD_SPD: 0.62, VIEW: 620, GAP: 260 };
+function obsGen() {
+  const R = mulberry32(race.seed ^ 0x51ed27), list = [];
+  for (let k = 0; k < RACE.STAGES; k++) {
+    const s0 = k * RACE.STAGE_LEN, sd = stationD(k), used = [];
+    const slot = len => {
+      for (let t = 0; t < 40; t++) {
+        const d = s0 + 650 + R() * (RACE.STAGE_LEN - 1200 - len);
+        if (Math.abs(d - sd) < 520 || d + len > sd - 650 && d < sd + FUEL.PIT_OUT + 120) continue;
+        if (used.some(u => d < u + OBS.GAP && d + len > u - OBS.GAP)) continue;
+        used.push(d); return d;
+      }
+      return null;
+    };
+    for (let j = 0; j < OBS.WRECKS; j++) {
+      const d = slot(14); if (d == null) continue;
+      const two = R() < 0.4, l0 = Math.floor(R() * (two ? 3 : 4));
+      list.push({ type: 'wreck', d, len: 12, lanes: two ? [l0, l0 + 1] : [l0], seed: R() });
+    }
+    for (let j = 0; j < OBS.FLOODS; j++) {
+      const d = slot(OBS.FLOOD_LEN); if (d == null) continue;
+      const dry = Math.floor(R() * 4);
+      list.push({ type: 'flood', d, len: OBS.FLOOD_LEN, lanes: [0, 1, 2, 3].filter(l => l !== dry), dry, seed: R() });
+    }
+    for (let j = 0; j < OBS.PUDDLES; j++) {
+      const d = slot(70); if (d == null) continue;
+      const n = 2 + Math.floor(R() * 2);
+      for (let q = 0; q < n; q++) list.push({ type: 'puddle', d: d + q * (18 + R() * 14), len: 7 + R() * 5, lanes: [Math.floor(R() * 4)], seed: R(), w: 2.6 + R() * 1.2 });
+    }
+  }
+  return list.sort((a, b) => a.d - b.d);
+}
+function obsAhead(lane, d, range, kinds) {
+  if (!race.obs) return null;
+  let best = null;
+  for (const o of race.obs) {
+    if (o.dead || o.d - d > range) { if (o.d - d > range) break; continue; }
+    if (o.d + o.len < d || !o.lanes.includes(lane) || kinds.indexOf(o.type) < 0) continue;
+    const g = Math.max(0, o.d - d); if (best === null || g < best) best = g;
+  }
+  return best;
+}
+function rivalWater(r) {
+  if (!race.obs) return 1;
+  for (const o of race.obs) {
+    if (o.d - r.d > 40) break;
+    if (r.d > o.d - 30 && r.d < o.d + o.len + 2) {
+      if (!r.model) return o.type === 'flood' ? 0.8 : o.type === 'wreck' ? 0.8 : 0.96;   // fuera de cámara: embudo y frenazo
+      if (o.type === 'flood' && !o.dead && Math.abs(r.x - LANES[o.dry]) > 1.6 && r.d > o.d - 2) return OBS.FLOOD_SPD;
+    }
+  }
+  return 1;
+}
+/* ---------- modelos ---------- */
+const OBSM = {};
+function obsMats() {
+  if (OBSM.water) return;
+  const blob = canvasTex(256, 256, (x, w, h) => {
+    const g = x.createRadialGradient(w / 2, h / 2, w * 0.18, w / 2, h / 2, w / 2);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.7, '#ddd'); g.addColorStop(1, '#000');
+    x.fillStyle = '#000'; x.fillRect(0, 0, w, h); x.fillStyle = g;
+    x.beginPath(); for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2, r = w * (0.4 + 0.05 * Math.sin(a * 3 + 1) + 0.03 * Math.cos(a * 5)); x.lineTo(w / 2 + Math.cos(a) * r, h / 2 + Math.sin(a) * r); } x.fill();
+  }, false);
+  OBSM.water = envMat(std({ color: col(0x1d5a8c), emissive: col(0x06223a), metalness: 0.55, roughness: 0.12, transparent: true, alphaMap: blob, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }));
+  const flood = canvasTex(256, 512, (x, w, h) => {
+    x.fillStyle = '#000'; x.fillRect(0, 0, w, h);
+    const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#000'); g.addColorStop(0.08, '#fff'); g.addColorStop(0.92, '#fff'); g.addColorStop(1, '#000');
+    x.fillStyle = g; x.fillRect(0, 0, w, h);
+  }, false);
+  OBSM.flood = envMat(std({ color: col(0x1f6aa0), emissive: col(0x072a48), metalness: 0.5, roughness: 0.15, transparent: true, alphaMap: flood, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }));
+  OBSM.wreckA = std({ color: col(0x2a2c31), roughness: 0.9, metalness: 0.2 });
+  OBSM.hazard = basic({ color: new THREE.Color(2.4, 1.2, 0.1) });
+  OBSM.sign = (txt, c1) => basic({ map: canvasTex(512, 256, (x, w, h) => {
+    x.fillStyle = '#111'; x.fillRect(0, 0, w, h); x.fillStyle = c1;
+    x.beginPath(); x.moveTo(w / 2, 18); x.lineTo(w / 2 + 110, 150); x.lineTo(w / 2 - 110, 150); x.closePath(); x.fill();
+    x.fillStyle = '#111'; x.font = '900 90px Arial'; x.textAlign = 'center'; x.fillText('!', w / 2, 138);
+    x.fillStyle = c1; x.font = "900 54px Orbitron, Arial, sans-serif"; x.fillText(txt, w / 2, 222, w - 30);
+  }), color: new THREE.Color(1.2, 1.2, 1.2) });
+}
+function buildObs(o) {
+  obsMats();
+  const g = new THREE.Group(), x0 = Math.min(...o.lanes.map(l => LANES[l])), x1 = Math.max(...o.lanes.map(l => LANES[l]));
+  const R = mulberry32(Math.floor(o.seed * 1e9));
+  if (o.type === 'puddle') {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(o.w, o.len, 1, 4).rotateX(-Math.PI / 2), OBSM.water);
+    m.position.set(LANES[o.lanes[0]] + (R() - 0.5) * 0.8, 0.07, -o.len / 2); m.renderOrder = 2; g.add(m);
+  } else if (o.type === 'flood') {
+    const w = x1 - x0 + 4.4, cx = (x0 + x1) / 2;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, o.len + 6, 2, 12).rotateX(-Math.PI / 2), OBSM.flood);
+    m.position.set(cx, 0.07, -o.len / 2); m.renderOrder = 2; g.add(m);
+    o.sx = o.dry < 2 ? 10.6 : -10.6;
+    const post = std({ color: col(0x2a2f3a) });
+    [60, 160].forEach(k => {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.4, 0.2), post); p.position.set(o.sx, 1.7, k); g.add(p);
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.3), OBSM.sign('FLOOD', '#34c3ef')); s.position.set(o.sx, 3.6, k + 0.15); g.add(s);
+    });
+  } else {
+    // accidente: 2 coches cruzados y destrozados, conos y bengalas
+    const cx = (x0 + x1) / 2, span = x1 - x0;
+    const cars = [];
+    for (let i = 0; i < (o.lanes.length > 1 ? 3 : 2); i++) {
+      const c = buildCar({ color: [0x8b1e2d, 0x3d4450, 0x1e3a8a][i % 3], style: ['sedan', 'hatch', 'suv'][i % 3] });
+      const t = o.lanes.length > 1 ? (i - 1) * (span / 2 + 0.6) : (i - 0.5) * 1.0;
+      c.root.position.set(cx + t, 0, -2 - i * 4.2 - R() * 2);
+      c.root.rotation.set(0, (i % 2 ? -0.7 : 1.35) + (R() - 0.5) * 0.5, i === 1 ? Math.PI : (R() - 0.5) * 0.2);
+      if (i === 1) c.root.position.y = 1.3;
+      g.add(c.root); cars.push(c);
+    }
+    o.hw = (span + 4) / 2; o.cx = cx;
+    o.sx = cx < 0 ? -10.6 : 10.6;
+    const post = std({ color: col(0x2a2f3a) });
+    [70, 170].forEach(k => {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.4, 0.2), post); p.position.set(o.sx, 1.7, k); g.add(p);
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.3), OBSM.sign('ACCIDENT', '#ffb21a')); s.position.set(o.sx, 3.6, k + 0.15); g.add(s);
+    });
+    o.flares = [];
+    for (let q = 0; q < 6; q++) o.flares.push([x0 - 1.8 + (span + 3.6) * q / 5, 6 + q * 1.5]);
+    // conos de aviso delante del accidente
+    o.cones = [];
+    for (let q = 0; q < 5; q++) {
+      const c = new THREE.Mesh(coneGeo, coneMat); c.position.set(lerp(x0 - 1.8, x1 + 1.8, q / 4), 0, 10 + q * 0.4); c.castShadow = true; g.add(c);
+    }
+  }
+  scene.add(g); return g;
+}
+/* ---------- estado ---------- */
+function obsInit() {
+  obsCleanup();
+  race.obs = obsGen(); race.obsMsg = {};
+}
+function obsCleanup() {
+  (race.obs || []).forEach(o => { if (o.g) { scene.remove(o.g); o.g = null; } });
+}
+function updateObstacles(dt) {
+  if (!race.obs) return;
+  const pd = player_d(), off = worldDist - (run.dist || 0);
+  for (const o of race.obs) {
+    if (o.dead) continue;
+    const z = pd - o.d;                       // borde cercano del obstáculo
+    if (z < -OBS.VIEW) break;
+    if (z - o.len > 60) { if (o.g) { scene.remove(o.g); o.g = null; } o.dead = true; continue; }
+    if (!o.g) {
+      // no colocar encima de obras, túneles ni puentes
+      if (Zones.list.some(Z => Z.start - off < o.d + o.len + 40 && Z.end - off > o.d - 40)) { o.dead = true; continue; }
+      o.g = buildObs(o);
+    }
+    o.g.position.z = z;
+    if (state !== 'playing' || race.pit) continue;
+    // avisos
+    if (!o.warned && z > -260 && o.type !== 'puddle') {
+      o.warned = true;
+      if (o.type === 'wreck') toast('⚠ ACCIDENT AHEAD', o.lanes.length > 1 ? 'two lanes blocked' : 'lane blocked', '#ffb21a');
+      else toast('⚠ FLOODED ROAD', ['far left', 'left', 'right', 'far right'][o.dry] + ' lane is dry', '#34c3ef');
+    }
+    const inZ = z > -o.len - P_HL && z < P_HL;
+    if (!inZ) continue;
+    if (o.type === 'puddle') {
+      if (!o.hit && Math.abs(player.x - LANES[o.lanes[0]]) < (o.w / 2 + P_HW - 0.3) && player.speed > 22) {
+        o.hit = true;
+        player.speed *= 0.9; player.vx += (Math.random() < 0.5 ? -1 : 1) * rand(5, 8); player.steer *= 0.3;
+        shake = Math.max(shake, 0.3); buzz(15); AudioSys.sfx('screech');
+        for (let i = 0; i < 16; i++) emit({ x: player.x + rand(-1.1, 1.1), y: 0.3, z: rand(-1.5, 1.5), vx: rand(-3, 3), vy: rand(2, 5), vz: rand(2, 6), life: 0.6, max: 0.6, size: 0.8, grow: 1.5, r: 0.75, g: 0.85, b: 0.95, add: false, grav: 9, drag: 1, world: true });
+        if (!race.obsMsg.p || simTime - race.obsMsg.p > 3) { race.obsMsg.p = simTime; toast('AQUAPLANING', 'speed lost', '#34c3ef'); }
+      }
+    } else if (o.type === 'flood') {
+      if (Math.abs(player.x - LANES[o.dry]) > 1.6) {
+        const cap = P.maxSpeed * OBS.FLOOD_SPD;
+        if (player.speed > cap) player.speed = damp(player.speed, cap, 3, dt);
+        player.nitroOn = false;
+        if (fxChance(0.9, dt)) for (const s2 of [-1, 1]) emit({ x: player.x + s2 * 1.1, y: 0.25, z: rand(-1, 1.5), vx: s2 * rand(2, 4), vy: rand(2, 4), vz: rand(3, 6), life: 0.5, max: 0.5, size: 1, grow: 1.6, r: 0.75, g: 0.85, b: 0.95, add: false, grav: 8, drag: 1, world: true });
+      }
+    } else if (!o.hit && player.invuln <= 0 && Math.abs(player.x - o.cx) < o.hw + P_HW - 0.6 && z > -o.len + 1 && z < 1.5) {
+      o.hit = true;
+      let dir = Math.sign(player.x - o.cx) || 1, nx = o.cx + dir * (o.hw + P_HW + 0.2);
+      if (Math.abs(nx) > X_LIMIT) { dir = -dir; nx = o.cx + dir * (o.hw + P_HW + 0.2); }
+      crash({ x: o.cx, z: 0, model: null }, dir);
+      player.x = clamp(nx, -X_LIMIT, X_LIMIT); player.vx = 0;
+    }
+  }
+}
+function obsFx() {
+  if (!race.obs) return;
+  const n = todState.night, blink = Math.sin(simTime * 9) > 0;
+  for (const o of race.obs) {
+    if (!o.g) continue;
+    const z = o.g.position.z;
+    if (o.type === 'wreck') {
+      if (blink) o.flares.forEach(([fx, fz]) => glow.add(fx, 0.35, z + fz, 2.2, 1, 0.15, 0.05, 0.9));
+      glow.add(o.cx, 1.2, z - 4, 9, 1, 0.55, 0.1, blink ? 0.85 : 0.3);
+      glow.add(o.cx - o.hw + 1, 1.6, z - 1, 4, 1, 0.6, 0.05, blink ? 1 : 0.1); glow.add(o.cx + o.hw - 1, 1.6, z - 1, 4, 1, 0.6, 0.05, blink ? 0.1 : 1);
+      if (fxChance(0.5, 1 / 60)) emit({ x: o.cx + rand(-1.5, 1.5), y: 1.2, z: z - rand(2, 8), vx: rand(-0.3, 0.3), vy: rand(1.2, 2.2), vz: 0, life: 2.4, max: 2.4, size: 1.6, grow: 2.2, r: 0.2, g: 0.2, b: 0.22, add: false, grav: -0.5, drag: 0.4, world: true });
+      [70, 170].forEach(k => { if (blink) glow.add(o.sx, 4.5, z + k, 2.5, 1, 0.6, 0.05, 0.9); });
+    } else if (o.type === 'flood') {
+      [60, 160].forEach(k => { if (blink) glow.add(o.sx, 4.5, z + k, 2.5, 0.2, 0.75, 1, 0.9); });
+      if (n > 0.3) glow.add(LANES[o.dry], 0.1, z - o.len / 2, 3, 0.3, 1, 0.5, 0.25);
+    }
+  }
+}
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
@@ -5715,7 +5925,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '3ce7ff6b';
+window.NS_BUILD = '3d7e933e';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

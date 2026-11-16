@@ -763,6 +763,7 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
       <li><em>🥉</em><span>Cross every checkpoint in the <b>TOP 3</b> or you are eliminated.</span></li>
       <li><em>⚡</em><span>Rivals use nitro and block you. Follow one closely to catch his <b>slipstream</b> and refill nitro. Bumping costs speed.</span></li>
       <li><em>⛽</em><span>Fuel runs out with distance (nitro burns more). One station per stage: keep RIGHT to pit for 3 s. Fuel cans on the road give +15%. Every bump or crash costs fuel.</span></li>
+      <li><em>⚠️</em><span>Watch the road: <b>puddles</b> make you aquaplane, <b>floods</b> slow you down (find the dry lane) and <b>accidents</b> block lanes.</span></li>
       <li><em>🪙</em><span>Coins for every stage cleared, plus a podium bonus: 1st 1,500 · 2nd 900 · 3rd 600.</span></li>
     </ul>
     <div class="rp-meta"><span>CAR · <b id="rp-car">Red Sport</b></span><span id="rp-best">NOT RACED YET</span></div>
@@ -1062,15 +1063,15 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=095194c163'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=497273ab5a'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10345973;
-  fetch('game.js?v=095194c163').then(function (r) {
+  var TOTAL = 10358186;
+  fetch('game.js?v=497273ab5a').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
