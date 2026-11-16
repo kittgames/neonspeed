@@ -10529,6 +10529,66 @@ Object.assign(actions, {
 setTimeout(() => pushIntro(false), 3500);
 
 window.NS_BUILD = '1cd79fbf';
+/* =====================================================================
+   PULIDO GRÁFICO (solo build r187)
+   - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
+     sol, luna, tormenta y relámpagos) en lugar de un cubo de degradado de 64 px.
+   - Sombras más finas y suaves en calidad alta.
+   ===================================================================== */
+const Polish = (() => {
+  const P = { on: false, rt: null, last: -1e9, bakes: 0 };
+  const pm = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  const envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 48, 24), skyMat);
+  envSky.frustumCulled = false; envScene.add(envSky);
+  const GRAD = { day: ENV.day, night: ENV.night };
+
+  function setEnv(tex) {
+    ENV.day = tex || GRAD.day; ENV.night = tex || GRAD.night;
+    const cur = tex || ENV[ENV.current];
+    envMats.forEach(m => {
+      const o = m.envMap; if (o === cur) return;
+      // recompilar solo si cambia el tipo o el tamaño del mapa (cubo de degradado ↔ PMREM)
+      const remake = !o || !!o.isCubeTexture !== !!cur.isCubeTexture || (o.image && cur.image && o.image.height !== cur.image.height);
+      m.envMap = cur; if (remake) m.needsUpdate = true;
+    });
+  }
+  function bake() {
+    const old = P.rt;
+    P.rt = pm.fromScene(envScene, 0, 0.1, 100, { size: Quality.level >= 3 ? 256 : 128 });
+    setEnv(P.rt.texture);
+    if (old) old.dispose();
+    P.bakes++;
+  }
+  P.tick = () => {
+    const on = Quality.level >= 2;
+    if (on !== P.on) {
+      P.on = on;
+      if (!on) { setEnv(null); if (P.rt) { P.rt.dispose(); P.rt = null; } }
+      P.last = -1e9;
+    }
+    if (!on) return;
+    const now = performance.now() / 1000;
+    // El cielo cambia despacio: basta con rehacerlo cada poco (más a menudo en relámpagos)
+    const every = Weather.flash > 0.05 ? 0.15 : Quality.level >= 3 ? 1 : 3;
+    if (now - P.last > every) { P.last = now; bake(); }
+  };
+  P.dirty = () => { P.last = -1e9; };
+  return P;
+})();
+
+// Sombras: mapa 2048 y filtro suave (r187: PCF con disco de Vogel; radius en texels)
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.radius = 2.5;
+sun.shadow.normalBias = 0.02;
+
+{
+  const _render = Post.render;
+  Post.render = () => { Polish.tick(); _render(); };
+  const _setWorld = setWorld;
+  setWorld = id => _setWorld(id).then(w => { Polish.dirty(); return w; });
+}
+
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
