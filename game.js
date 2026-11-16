@@ -5716,7 +5716,7 @@ const Post = (() => {
   const VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
   const mat = (fs, uniforms) => new THREE.ShaderMaterial({ uniforms, vertexShader: VS, fragmentShader: fs, depthTest: false, depthWrite: false });
   const bright = mat(`uniform sampler2D tDiffuse; uniform float threshold, knee; varying vec2 vUv;
-    void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = max(c.r, max(c.g, c.b));
+    void main(){ vec4 t4 = texture2D(tDiffuse, vUv); vec3 c = t4.rgb * clamp(t4.a, 0.0, 1.0); float l = max(c.r, max(c.g, c.b));
       float s = clamp(l - threshold + knee, 0.0, 2.0 * knee); s = s * s / (4.0 * knee + 1e-4);
       gl_FragColor = vec4(c * (max(s, l - threshold) / max(l, 1e-4)), 1.0); }`,
     { tDiffuse: { value: null }, threshold: { value: 0.6 }, knee: { value: 0.22 } });
@@ -6694,7 +6694,7 @@ function updatePlayer(dt) {
   player.vx = damp(player.vx, player.steer * latMax, 7 * grip, dt);
   if (Weather.wet > 0.3 && player.speed > 30 && fxChance(0.5 * Weather.wet, dt))
     for (const s of [-0.95, 0.95]) emit({ x: player.x + s, y: 0.25, z: 1.6, vx: rand(-0.6, 0.6), vy: rand(0.6, 1.6), vz: rand(3, 6), life: 0.7, max: 0.7, size: 1.1, grow: 2.2, r: 0.75, g: 0.8, b: 0.88, add: false, grav: 0, drag: 1.2, world: true });
-  const cf = -bend.x * player.speed * player.speed * 0.42;
+  const cf = Drift.cf(-bend.x * player.speed * player.speed * 0.42, latMax);
   player.x += (player.vx + cf) * dt;
   player.wall = false;
   if (player.x > X_LIMIT) { player.x = X_LIMIT; if (player.vx > 0) player.vx *= -0.3; player.wall = true; }
@@ -6728,7 +6728,7 @@ function updatePlayer(dt) {
     for (const s of [-0.98, 0.98]) emit({ x: player.x + s, y: 0.2, z: 1.4, vx: 0, vy: rand(0.3, 0.8), vz: 0, life: 1, max: 1, size: 0.8, grow: 1.8, r: 0.8, g: 0.8, b: 0.82, add: false, grav: 0, drag: 1, world: true });
   }
   // Spawning
-  if (run.dist >= run.nextSpawn) { spawnPattern(); run.nextSpawn = run.dist + lerp(80, 34, diff) * rand(0.8, 1.25); }
+  if (run.dist >= run.nextSpawn) { spawnPattern(); run.nextSpawn = run.dist + lerp(80, 34, diff) * rand(0.8, 1.25) * Drift.gap(); }
   if (run.dist >= run.nextCoin) { spawnCoins(); run.nextCoin = run.dist + rand(150, 260); }
   if (run.dist >= run.nextPU) { spawnPowerup(); run.nextPU = run.dist + rand(700, 1100) * P.puGap; }
   // Live mission completion check
@@ -7504,7 +7504,7 @@ function update(realDt) {
   bend.dist -= d;
   if (bend.dist <= 0) {
     bend.dist = rand(350, 750);
-    bend.tx = Math.random() < 0.3 ? 0 : rand(-1, 1) * 0.0011;
+    bend.tx = Drift.next();
     bend.ty = Math.random() < 0.4 ? 0 : rand(-1, 1) * 0.00045;
   }
   const kb = 1 - Math.exp(-d / 160);
@@ -10691,6 +10691,39 @@ const Mirror = (() => {
 window.__nsPolish = { Polish, Mirror, sun, renderer };
 
 
+/* ---------- Menos bloom en la carrocería de los coches ---------- */
+// Las piezas opacas de los coches escriben un peso de bloom en el canal alfa; el pase de brillo lo aplica.
+// Así un coche blanco conserva su textura y los faros, neones y nitro siguen brillando igual.
+const CarBloom = (() => {
+  const W = 0.3, ids = new Map();
+  const patch = m => {
+    if (!m || m.userData.nb || m.transparent || !m.isMeshStandardMaterial) return;
+    m.userData.nb = true;
+    // Pinturas muy claras: un poco menos de blanco puro para que el sol no las queme y se vea el volumen
+    const c = m.color, lum = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    if (m.map) c.multiplyScalar(0.88); else if (lum > 0.6) c.multiplyScalar(lerp(1, 0.78, clamp((lum - 0.6) / 0.3, 0, 1)));
+    const prev = m.onBeforeCompile, key = m.customProgramCacheKey;
+    if (!ids.has(prev)) ids.set(prev, ids.size);
+    const id = ids.get(prev), hadKey = Object.prototype.hasOwnProperty.call(m, 'customProgramCacheKey');
+    m.onBeforeCompile = (sh, r) => {
+      if (prev) prev(sh, r);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  gl_FragColor.a = ' + W.toFixed(2) + ';');
+    };
+    m.customProgramCacheKey = () => 'nb' + id + (hadKey ? key.call(m) : '');
+    m.needsUpdate = true;
+  };
+  const tree = o => { if (o && o.traverse) o.traverse(c => { if (c.isMesh) (Array.isArray(c.material) ? c.material : [c.material]).forEach(patch); }); };
+  return { patch, tree };
+})();
+{
+  // Materiales de coche ya creados y los que se creen después
+  paintCache.forEach(CarBloom.patch); Object.values(CARMAT).forEach(CarBloom.patch); stripeMatCache.forEach(CarBloom.patch); _brandMats.forEach(CarBloom.patch);
+  const _p = paint; paint = function (...a) { const m = _p.apply(this, a); CarBloom.patch(m); return m; };
+  const _b = brandMat; brandMat = function (...a) { const m = _b.apply(this, a); CarBloom.patch(m); return m; };
+  const _sp = stripePaint; stripePaint = function (...a) { const m = _sp.apply(this, a); CarBloom.patch(m); return m; };
+  [player.model, ...traffic.map(v => v.model)].forEach(m => CarBloom.tree(m && (m.root || m.body)));
+}
+
 /* =====================================================================
    CIUDAD: edificios con forma y detalle
    - Planta baja con escaparates, acera, cornisa, torres con retranqueo
@@ -10923,6 +10956,101 @@ const Ads = (() => {
   const _aw = applyWorldNow;
   applyWorldNow = (id, pack) => { _aw(id, pack); Ads.refresh(); };
 }
+
+/* =====================================================================
+   CURVAS Y DERRAPE (modo libre)
+   - Curvas medias y cerradas, con aviso en pantalla
+   - Derrape: girar hacia dentro de la curva a buena velocidad cruza el coche; cuanto más dura, más puntos.
+     Al terminar se cobran los puntos y recarga nitro. Tocar el muro pierde lo acumulado.
+   - Menos tráfico dentro de las curvas fuertes
+   ===================================================================== */
+const Drift = (() => {
+  const D = { a: 0, pts: 0, t: 0, kind: 0, yaw: 0, sfxT: 0, best: 0 };
+  const ok = () => state === 'playing' && !race.active && !run.daily && !run.challenge;
+  let lastTight = false;
+
+  // Aviso de curva
+  const warn = document.createElement('div');
+  warn.id = 'curvewarn';
+  warn.style.cssText = 'position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:30;pointer-events:none;opacity:0;transition:opacity .25s;' +
+    "font-family:'Orbitron',sans-serif;font-weight:900;letter-spacing:.14em;text-align:center;text-shadow:0 0 14px currentColor";
+  const live = document.createElement('div');
+  live.id = 'driftlive';
+  live.style.cssText = 'position:fixed;left:50%;top:31%;transform:translateX(-50%);z-index:30;pointer-events:none;opacity:0;transition:opacity .15s;' +
+    "font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(18px,4.2vw,30px);letter-spacing:.1em;color:#ffd23f;text-shadow:0 0 16px #ff7a3c";
+  document.body.appendChild(warn); document.body.appendChild(live);
+  let warnT = 0;
+  const announce = (s, k) => {
+    const arrows = s > 0 ? '›››' : '‹‹‹';
+    warn.style.color = k === 2 ? '#ff3b5c' : '#ffd23f';
+    warn.innerHTML = `<div style="font-size:clamp(30px,8vw,58px);line-height:1">${arrows}</div><div style="font-size:clamp(12px,3vw,18px)">${k === 2 ? 'SHARP ' : ''}${s > 0 ? 'RIGHT' : 'LEFT'}</div>`;
+    warn.style.opacity = 1; warnT = 2.4;
+  };
+
+  // Siguiente tramo: devuelve la curvatura objetivo
+  D.next = () => {
+    D.kind = 0;
+    const gentle = () => (Math.random() < 0.3 ? 0 : rand(-1, 1) * 0.0011);
+    if (!ok() || (run.dist || 0) < 500) return gentle();
+    const r = Math.random(), s = Math.random() < 0.5 ? -1 : 1;
+    if (lastTight) { lastTight = false; return Math.random() < 0.6 ? 0 : rand(-1, 1) * 0.0008; } // respiro tras una cerrada
+    if (r < 0.2) return 0;
+    if (r < 0.5) return rand(-1, 1) * 0.0011;
+    if (r < 0.82) { D.kind = 1; bend.dist = rand(330, 470); announce(s, 1); return s * rand(0.0017, 0.0022); }
+    D.kind = 2; lastTight = true; bend.dist = rand(300, 400); announce(s, 2); return s * rand(0.0026, 0.0031);
+  };
+  // Empuje lateral de la curva: nunca más de lo que el coche puede compensar girando
+  D.cf = (cf, latMax) => {
+    if (!ok()) return cf;
+    const lim = latMax * 0.6;
+    const c = clamp(cf, -lim, lim);
+    // Derrapando, el coche desliza hacia fuera casi tanto como gira hacia dentro: se puede mantener el derrape toda la curva
+    return Math.sign(c) * lerp(Math.abs(c), latMax * 0.86, D.a * D.a);
+  };
+  // Separación entre grupos de tráfico (más aire en curvas fuertes)
+  D.gap = () => (ok() ? (D.kind === 2 ? 2 : D.kind === 1 ? 1.5 : 1) : 1);
+
+  const bank = () => {
+    const pts = Math.round(D.pts / 10) * 10;
+    D.pts = 0; D.t = 0; live.style.opacity = 0;
+    if (pts < 50) return;
+    addScore(pts);
+    player.nitro = Math.min(100, player.nitro + Math.min(35, pts / 30));
+    run.combo++; run.comboTimer = 3.2; run.bestCombo = Math.max(run.bestCombo, run.combo);
+    D.best = Math.max(D.best, pts);
+    toast(pts >= 1000 ? 'MEGA DRIFT' : pts >= 500 ? 'GREAT DRIFT' : 'DRIFT', '+' + pts * (player.x2 > 0 ? 2 : 1), pts >= 500 ? '#ff2bd6' : '#ffd23f');
+    AudioSys.sfx('near', Math.min(6, 1 + (pts / 200 | 0)));
+  };
+  D.update = dt => {
+    if (warnT > 0 && (warnT -= dt) <= 0) warn.style.opacity = 0;
+    if (state !== 'playing') { if (D.pts || D.a) { D.pts = 0; D.a = 0; D.t = 0; live.style.opacity = 0; warn.style.opacity = 0; } return; }
+    const cur = Math.abs(bend.x), dir = Math.sign(bend.x), sf = player.speed / P.maxSpeed;
+    if (player.wall && D.pts > 60) { D.pts = 0; D.t = 0; live.style.opacity = 0; toast('DRIFT LOST', 'Hit the wall', '#ff3b5c'); }
+    const can = ok() && cur > 0.0012 && sf > 0.5 && !player.wall;
+    const want = can && player.steer * dir > 0.3;
+    const was = D.a;
+    D.a = damp(D.a, want ? 1 : 0, want ? 5 : 3.5, dt);
+    if (D.a > 0.3 && can) {
+      D.t += dt;
+      D.pts += (cur / 0.003) * sf * 110 * (1 + D.t * 0.15) * dt;
+      player.speed *= 1 - 0.025 * D.a * dt;
+      if (was <= 0.3 || (D.sfxT -= dt) <= 0) { AudioSys.sfx('screech'); D.sfxT = 0.85; }
+      if (fxChance(0.95, dt)) for (const s of [-0.85, 0.85])
+        emit({ x: player.x + s, y: 0.2, z: 1.7, vx: -dir * rand(1, 3), vy: rand(0.5, 1.4), vz: rand(2, 5), life: 0.8, max: 0.8, size: 1.2, grow: 2.6, r: 0.85, g: 0.85, b: 0.9, add: false, grav: 0, drag: 1.2 });
+      if (D.pts > 30) { live.textContent = 'DRIFT ' + (Math.round(D.pts / 10) * 10); live.style.opacity = 1; }
+    } else if (D.pts > 0 && D.a < 0.2) bank();
+    // el coche se cruza: morro hacia dentro de la curva
+    D.yaw = damp(D.yaw, -dir * 0.42 * D.a, 7, dt);
+  };
+  return D;
+})();
+{
+  const _up = updatePlayer;
+  updatePlayer = function (dt) { _up(dt); Drift.update(dt); };
+  const _uv = updatePlayerVisual;
+  updatePlayerVisual = function (dt, ws) { _uv(dt, ws); if (Drift.yaw) playerModel.root.rotation.y += Drift.yaw; };
+}
+window.__nsPolish.Drift = Drift; window.__nsPolish.bend = bend;
 
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
