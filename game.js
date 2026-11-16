@@ -5716,7 +5716,7 @@ const Post = (() => {
   const VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
   const mat = (fs, uniforms) => new THREE.ShaderMaterial({ uniforms, vertexShader: VS, fragmentShader: fs, depthTest: false, depthWrite: false });
   const bright = mat(`uniform sampler2D tDiffuse; uniform float threshold, knee; varying vec2 vUv;
-    void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = max(c.r, max(c.g, c.b));
+    void main(){ vec4 t4 = texture2D(tDiffuse, vUv); vec3 c = t4.rgb * clamp(t4.a, 0.0, 1.0); float l = max(c.r, max(c.g, c.b));
       float s = clamp(l - threshold + knee, 0.0, 2.0 * knee); s = s * s / (4.0 * knee + 1e-4);
       gl_FragColor = vec4(c * (max(s, l - threshold) / max(l, 1e-4)), 1.0); }`,
     { tDiffuse: { value: null }, threshold: { value: 0.6 }, knee: { value: 0.22 } });
@@ -10690,6 +10690,39 @@ const Mirror = (() => {
 
 window.__nsPolish = { Polish, Mirror, sun, renderer };
 
+
+/* ---------- Menos bloom en la carrocería de los coches ---------- */
+// Las piezas opacas de los coches escriben un peso de bloom en el canal alfa; el pase de brillo lo aplica.
+// Así un coche blanco conserva su textura y los faros, neones y nitro siguen brillando igual.
+const CarBloom = (() => {
+  const W = 0.3, ids = new Map();
+  const patch = m => {
+    if (!m || m.userData.nb || m.transparent || !m.isMeshStandardMaterial) return;
+    m.userData.nb = true;
+    // Pinturas muy claras: un poco menos de blanco puro para que el sol no las queme y se vea el volumen
+    const c = m.color, lum = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    if (m.map) c.multiplyScalar(0.88); else if (lum > 0.6) c.multiplyScalar(lerp(1, 0.78, clamp((lum - 0.6) / 0.3, 0, 1)));
+    const prev = m.onBeforeCompile, key = m.customProgramCacheKey;
+    if (!ids.has(prev)) ids.set(prev, ids.size);
+    const id = ids.get(prev), hadKey = Object.prototype.hasOwnProperty.call(m, 'customProgramCacheKey');
+    m.onBeforeCompile = (sh, r) => {
+      if (prev) prev(sh, r);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  gl_FragColor.a = ' + W.toFixed(2) + ';');
+    };
+    m.customProgramCacheKey = () => 'nb' + id + (hadKey ? key.call(m) : '');
+    m.needsUpdate = true;
+  };
+  const tree = o => { if (o && o.traverse) o.traverse(c => { if (c.isMesh) (Array.isArray(c.material) ? c.material : [c.material]).forEach(patch); }); };
+  return { patch, tree };
+})();
+{
+  // Materiales de coche ya creados y los que se creen después
+  paintCache.forEach(CarBloom.patch); Object.values(CARMAT).forEach(CarBloom.patch); stripeMatCache.forEach(CarBloom.patch); _brandMats.forEach(CarBloom.patch);
+  const _p = paint; paint = function (...a) { const m = _p.apply(this, a); CarBloom.patch(m); return m; };
+  const _b = brandMat; brandMat = function (...a) { const m = _b.apply(this, a); CarBloom.patch(m); return m; };
+  const _sp = stripePaint; stripePaint = function (...a) { const m = _sp.apply(this, a); CarBloom.patch(m); return m; };
+  [player.model, ...traffic.map(v => v.model)].forEach(m => CarBloom.tree(m && (m.root || m.body)));
+}
 
 /* =====================================================================
    CIUDAD: edificios con forma y detalle
