@@ -4784,7 +4784,8 @@ function raceBuildRivals() {
 function rivalModel(r) {
   let m = race.models.get(r.i);
   if (!m) {
-    m = buildCar({ color: r.color, accent: r.accent, style: r.style || undefined, player: !r.style });
+    m = r.ghost ? buildCar({ style: r.style || undefined, player: !r.style, override: basic({ color: new THREE.Color(r.gc[0], r.gc[1], r.gc[2]), transparent: true, opacity: 0.42, depthWrite: false }) })
+      : buildCar({ color: r.color, accent: r.accent, style: r.style || undefined, player: !r.style });
     const c = document.createElement('canvas'); c.width = 256; c.height = 72;
     const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
     const tag = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.73), basic({ map: tex, transparent: true, depthWrite: false }));
@@ -4795,14 +4796,15 @@ function rivalModel(r) {
   return m;
 }
 function drawTag(m, r) {
-  if (m.tag.pos === r.pos) return;
-  m.tag.pos = r.pos;
+  const key = r.pos + (r.out ? 'o' : '');
+  if (m.tag.pos === key) return;
+  m.tag.pos = key;
   const x = m.tag.c.getContext('2d'), top = r.pos <= 3;
   x.clearRect(0, 0, 256, 72);
   x.fillStyle = 'rgba(5,10,20,0.78)'; x.fillRect(4, 8, 248, 56);
-  x.fillStyle = top ? '#ffd23f' : '#00f0ff'; x.fillRect(4, 8, 66, 56);
-  x.fillStyle = '#071018'; x.font = "900 34px Orbitron, Arial, sans-serif"; x.textAlign = 'center'; x.fillText('P' + r.pos, 37, 48);
-  x.fillStyle = '#eaf6ff'; x.font = "700 30px Orbitron, Arial, sans-serif"; x.textAlign = 'left'; x.fillText(r.name, 80, 47, 168);
+  x.fillStyle = r.ghost ? '#c08bff' : top ? '#ffd23f' : '#00f0ff'; x.fillRect(4, 8, 66, 56);
+  x.fillStyle = '#071018'; x.font = "900 34px Orbitron, Arial, sans-serif"; x.textAlign = 'center'; x.fillText(r.out ? 'OUT' : 'P' + r.pos, 37, 48, 60);
+  x.fillStyle = r.ghost ? '#e6d4ff' : '#eaf6ff'; x.font = "700 30px Orbitron, Arial, sans-serif"; x.textAlign = 'left'; x.fillText((r.ghost ? '👻 ' : '') + r.name, 80, 47, 168);
   m.tag.tex.needsUpdate = true;
 }
 function rivalShow(r) {
@@ -4852,7 +4854,7 @@ function raceRankAll() {
   all.sort((a, b) => b.d - a.d);
   all.forEach((e, k) => { if (e.r) e.r.pos = k + 1; });
   race.pos = all.findIndex(e => !e.r) + 1;
-  race.top = new Set(all.filter(e => e.r).slice(0, RB.TOP).map(e => e.r));
+  race.top = new Set(all.filter(e => e.r && !e.r.ghost).slice(0, RB.TOP).map(e => e.r));
   race.board = all;
 }
 function raceInit() {
@@ -4860,6 +4862,7 @@ function raceInit() {
   race.seed = raceSeed();
   race.rivals.forEach(rivalHide);
   player.x = raceBuildRivals();
+  ghostsJoin(player.x);
   clearZones(); zoneRng = mulberry32(race.seed ^ 0x5bd1e995); extendZones();
   if (!race.cp) race.cp = buildCheckpoint();
   raceRankAll(); race.startPos = race.pos; fuelInit(); race.pitK = -1; obsInit();
@@ -4876,7 +4879,7 @@ function raceCleanup() {
 function rivalLaneFree(r, lane, ignorePlayer) {
   const x = LANES[lane], pd = player_d();
   for (const u of race.rivals) {
-    if (u === r || !u.model || u.pit) continue;
+    if (u === r || !u.model || u.pit || u.ghost) continue;
     const ux = u.chg ? u.chg.to : u.x;
     if ((Math.abs(ux - x) < 2.3 || Math.abs(u.x - x) < 2.3) && u.d - r.d < 26 && r.d - u.d < 12) return false;
   }
@@ -4889,10 +4892,11 @@ function rivalLaneFree(r, lane, ignorePlayer) {
 function updateRivals(dt) {
   if (!race.active) return;
   const going = state === 'playing' || state === 'gameover' || state === 'crashing';
-  if (state === 'playing') race.t += dt;
+  if (state === 'playing') { race.t += dt; ghostRecord(); }
   const ref = raceRef() * (1 + 0.05 * race.stage), pd = player_d();
   // 1) velocidad objetivo y avance
   for (const r of race.rivals) {
+    if (r.ghost) { ghostStep(r); r.target = r.spd; continue; }
     let target = going && race.t > r.react ? ref * r.f * (1 + 0.025 * Math.sin(race.t * r.w + r.ph)) : 0;
     if (r.stun > 0) { r.stun -= dt; target *= 0.45; }
     // nitro de los rivales: lo guardan y lo gastan sobre todo cuando pelean contigo
@@ -4927,10 +4931,10 @@ function updateRivals(dt) {
   const vis = race.rivals.filter(r => r.model);
   for (const r of vis) {
     const m = r.model;
-    if (r.pit) { r.aD = null; continue; }
+    if (r.pit || r.ghost) { r.aD = null; continue; }
     let gap = 1e9, aSpd = 0, aD = 0;
     for (const u of vis) {
-      if (u === r || u.pit || Math.abs(u.x - r.x) > 2.2 || u.d <= r.d) continue;
+      if (u === r || u.pit || u.ghost || Math.abs(u.x - r.x) > 2.2 || u.d <= r.d) continue;
       const g = u.d - r.d - u.model.halfL - m.halfL; if (g < gap) { gap = g; aSpd = u.spd; aD = u.d - u.model.halfL - m.halfL; }
     }
     if (!race.pit && r.d < pd && Math.abs(player.x - r.x) < 2.2) {
@@ -4958,6 +4962,7 @@ function updateRivals(dt) {
   }
   // 3) integración
   for (const r of race.rivals) {
+    if (r.ghost) continue;
     const a = r.target > r.spd ? 15 * (1.25 - 0.7 * clamp(r.spd / Math.max(1, r.target), 0, 1)) : 26;
     r.spd = r.target > r.spd ? Math.min(r.target, r.spd + a * dt) : Math.max(r.target, r.spd - a * dt);
     r.d += r.spd * dt;
@@ -4975,13 +4980,13 @@ function updateRivals(dt) {
   }
   // 4) quién se ve
   const cand = race.rivals.filter(r => { const rel = r.d - pd; return rel < RACE.VIS_AHEAD && rel > -RACE.VIS_BEHIND; })
-    .sort((a, b) => Math.abs(a.d - pd) - Math.abs(b.d - pd)).slice(0, RACE.MAX_VIS);
+    .sort((a, b) => (a.ghost ? -1e4 : Math.abs(a.d - pd)) - (b.ghost ? -1e4 : Math.abs(b.d - pd))).slice(0, RACE.MAX_VIS + (race.nGhost || 0));
   const set = new Set(cand);
   race.rivals.forEach(r => { if (!set.has(r)) rivalHide(r); });
   cand.forEach(r => {
     if (!r.model) {
       // al aparecer, que no nazca encima de otro coche
-      for (let k = 0; k < 4 && !r.pit && !rivalLaneFree(r, r.lane); k++) { r.lane = (r.lane + 1) % 4; r.x = LANES[r.lane]; }
+      for (let k = 0; k < 4 && !r.pit && !r.ghost && !rivalLaneFree(r, r.lane); k++) { r.lane = (r.lane + 1) % 4; r.x = LANES[r.lane]; }
       rivalShow(r);
     }
   });
@@ -4995,18 +5000,19 @@ function updateRivals(dt) {
     m.root.position.set(r.x, 0, z);
     m.root.rotation.y = r.pit ? 0 : r.chg ? -(r.chg.to - r.chg.from) * Math.sin(Math.PI * clamp(r.chg.t, 0, 1)) * 0.035 : 0;
     m.wheels.forEach(w => { w.spin.rotation.x -= r.spd * dt / (w.r || 0.36); });
-    if (m.tailMesh) m.tailMesh.material = r.target < r.spd - 1 ? MAT.tailBrake : MAT.tail;
+    if (m.tailMesh && !r.ghost) m.tailMesh.material = r.target < r.spd - 1 ? MAT.tailBrake : MAT.tail;
     drawTag(m, r);
     m.tag.mesh.visible = z > -170 && z < 3;
     if (state !== 'playing') continue;
     const ahead = r.d > pd, dx = Math.abs(r.x - player.x), dz = Math.abs(z);
     if (r.ahead && !ahead) {
       run.overtakes++; addScore(10);
-      const g = dx - (m.halfW + P_HW); if (g < 1.2 && dz < 8) nearMiss(r, Math.max(0, g));
+      const g = dx - (m.halfW + P_HW); if (!r.ghost && g < 1.2 && dz < 8) nearMiss(r, Math.max(0, g));
+      if (r.ghost) toast('👻 YOU PASSED ' + r.name, '', '#c08bff');
     }
     r.ahead = ahead;
-    if (ahead && dx < 1.3 && z < -3 && z > -22 && !race.pit) slip = true;
-    if (!race.pit && !r.pit && player.invuln <= 0 && dx < m.halfW + P_HW - 0.08 && dz < m.halfL + P_HL) raceContact(r, dx, dz);
+    if (!r.ghost && ahead && dx < 1.3 && z < -3 && z > -22 && !race.pit) slip = true;
+    if (!r.ghost && !race.pit && !r.pit && player.invuln <= 0 && dx < m.halfW + P_HW - 0.08 && dz < m.halfL + P_HL) raceContact(r, dx, dz);
   }
   raceSlip(slip, dt);
 }
@@ -5103,6 +5109,7 @@ function raceFinish(win) {
   $('rr-kmh').textContent = Math.round(run.maxKmh);
   $('rr-coins').textContent = '+' + fmt(earned);
   $('rr-board').innerHTML = raceBoardHTML(5);
+  ghostsFinish(win);
   if (win) AudioSys.sfx('mission');
   show('raceres');
 }
@@ -5112,7 +5119,7 @@ function raceBoardHTML(n) {
   const me = race.pos - 1;
   b.forEach((e, k) => { if (k < n || k === me) rows.push([k, e]); });
   return rows.map(([k, e]) => {
-    const name = e.r ? e.r.name : cleanNickname(save.nickname), you = !e.r;
+    const name = e.r ? (e.r.ghost ? '👻 ' : '') + e.r.name : cleanNickname(save.nickname), you = !e.r;
     const gap = k === 0 ? 'LEADER' : '+' + Math.max(0, (b[0].d - e.d) / Math.max(20, raceRef())).toFixed(1) + 's';
     return `<div class="rb-row${you ? ' you' : ''}${k < 3 ? ' top' : ''}"><b>${k + 1}</b><span>${name}</span><i>${gap}</i></div>`;
   }).join('');
@@ -5133,7 +5140,7 @@ function updateRaceHUD() {
     for (let k = 0; k < 3 && k < b.length; k++) rows.push([k, b[k]]);
     if (race.pos > 3) { const k = race.pos - 1; if (k - 1 >= 3) rows.push([k - 1, b[k - 1]]); rows.push([k, b[k]]); }
     const lead = b.length ? b[0].d : pd;
-    const html = rows.map(([k, e]) => `<div class="rs-row${e.r ? '' : ' you'}${k < 3 ? ' top' : ''}"><b>${k + 1}</b><span>${e.r ? e.r.name : 'YOU'}</span><i>${k === 0 ? '' : '+' + ((lead - e.d) / Math.max(20, raceRef())).toFixed(1) + 's'}</i></div>`).join('');
+    const html = rows.map(([k, e]) => `<div class="rs-row${e.r ? '' : ' you'}${k < 3 ? ' top' : ''}"><b>${k + 1}</b><span>${e.r ? (e.r.ghost ? '👻 ' : '') + e.r.name : 'YOU'}</span><i>${k === 0 ? '' : '+' + ((lead - e.d) / Math.max(20, raceRef())).toFixed(1) + 's'}</i></div>`).join('');
     if (hudCache.rs !== html) { hudCache.rs = html; $('racestand').innerHTML = html; }
   }
 }
@@ -5143,6 +5150,7 @@ function raceFx() {
   const n = todState.night;
   for (const r of race.rivals) {
     if (!r.model) continue;
+    if (r.ghost) { glow.add(r.x, 0.9, player_d() - r.d, 5, r.gc[0], r.gc[1], r.gc[2], 0.35); continue; }
     const L = r.model.lights, zz2 = (player_d() - r.d) + L.tailZ, a = lerp(0.35, 1, n) * (r.target < r.spd - 1 ? 1.8 : 1);
     glow.add(r.x - L.tailX, L.tailY, zz2, 1.6, 1, 0.06, 0.08, a); glow.add(r.x + L.tailX, L.tailY, zz2, 1.6, 1, 0.06, 0.08, a);
     if (r.nOn) { const fl = 0.8 + Math.random() * 0.4; glow.add(r.x - 0.45, 0.42, zz2 + 0.25, 2.6, 0.3, 0.75, 1, fl); glow.add(r.x + 0.45, 0.42, zz2 + 0.25, 2.6, 0.3, 0.75, 1, fl); }
@@ -5189,6 +5197,7 @@ function openRacePre() {
   $('rp-world').textContent = worldById(w).name;
   $('rp-best').textContent = b ? (b.cleared >= RACE.STAGES ? 'BEST: P' + b.pos : `BEST: ${b.cleared}/${RACE.STAGES} STAGES`) : 'NOT RACED YET';
   $('rp-car').textContent = carById(save.selected).name;
+  ghostsFetch(w);
   show('racepre');
 }
 Object.assign(actions, {
@@ -5667,6 +5676,82 @@ function obsFx() {
 }
 
 /* =====================================================================
+   v23: MODO RACE (fase 4) · GHOSTS DE AMIGOS
+   Se graba tu carrera (distancia y carril, 5 veces por segundo). Al acabar,
+   si es tu mejor resultado en ese mundo, se sube a Supabase. Al empezar una
+   carrera se cargan los ghosts de hasta 3 amigos: ocupan el sitio de 3
+   rivales, cuentan en la clasificación y no chocan.
+   ===================================================================== */
+const GHOST = { VER: 1, DT: 0.2, MAX: 3, COLS: [[0.75, 0.45, 1], [0.3, 1, 0.75], [1, 0.55, 0.3]] };
+function ghostRecord() {
+  const g = race.rec; if (!g) return;
+  while (race.t >= g.n * GHOST.DT) { g.d.push(Math.round(player_d() * 2)); g.x.push(Math.round(player.x * 10)); g.n++; }
+}
+function ghostEncode() {
+  const g = race.rec; if (!g || g.d.length < 10) return null;
+  const dd = g.d.map((v, i) => i ? v - g.d[i - 1] : v);
+  return 'g1|' + dd.join(',') + '|' + g.x.join(',');
+}
+function ghostDecode(s) {
+  try {
+    const [v, a, b] = String(s).split('|'); if (v !== 'g1') return null;
+    const dd = a.split(',').map(Number), xs = b.split(',').map(Number), n = Math.min(dd.length, xs.length);
+    const d = new Float32Array(n), x = new Float32Array(n); let acc = 0;
+    for (let i = 0; i < n; i++) { acc += dd[i]; d[i] = acc / 2; x[i] = xs[i] / 10; }
+    return { d, x };
+  } catch (e) { return null; }
+}
+function ghostsFetch(w) {
+  race.ghostWorld = w; race.ghostSrc = null;
+  const el = $('rp-ghosts'); if (el) el.textContent = 'FRIEND GHOSTS · loading…';
+  withTimeout(rpc('ns_race_ghosts', { ...netIdentity(), p_world: w, p_ver: GHOST.VER }), 6000).then(list => {
+    if (race.ghostWorld !== w) return;
+    race.ghostSrc = (Array.isArray(list) ? list : []).map(g => Object.assign({ name: cleanNickname(g.name), cleared: g.cleared, time: g.time, pos: g.pos, car: g.car }, ghostDecode(g.data))).filter(g => g.d).slice(0, GHOST.MAX);
+    if (el) el.innerHTML = race.ghostSrc.length ? 'FRIEND GHOSTS · ' + race.ghostSrc.map(g => `<b>👻 ${frEsc(g.name)}</b>`).join(' ') : 'FRIEND GHOSTS · none yet in this world';
+  }).catch(() => { if (el && race.ghostWorld === w) el.textContent = 'FRIEND GHOSTS · offline'; });
+}
+function ghostsJoin(px) {
+  race.rec = { d: [], x: [], n: 0 };
+  const src = race.ghostWorld === (save.world || 'neon') ? (race.ghostSrc || []) : [];
+  race.nGhost = src.length;
+  if (!src.length) return;
+  race.rivals.splice(race.rivals.length - src.length, src.length);
+  src.forEach((g, k) => {
+    const c = carById(g.car);
+    race.rivals.push({ i: 1000 + k, ghost: true, src: g, name: g.name, gc: GHOST.COLS[k], style: c.style || null, d: g.d[0], x: g.x[0] || px,
+      spd: 0, target: 0, lane: 0, model: null, ahead: false, pos: 50, out: false, f: 1, chg: null, pit: null });
+  });
+}
+function ghostStep(r) {
+  const g = r.src, n = g.d.length, f = race.t / GHOST.DT, i = Math.floor(f);
+  const prev = r.d;
+  if (i >= n - 1) { r.d = g.d[n - 1]; r.x = g.x[n - 1]; r.spd = 0; if (g.cleared < RACE.STAGES) r.out = true; }
+  else { const t = f - i; r.d = lerp(g.d[i], g.d[i + 1], t); r.x = lerp(g.x[i], g.x[i + 1], t); r.spd = (g.d[i + 1] - g.d[i]) / GHOST.DT; }
+  if (r.d < prev && race.t > 0) r.d = prev;
+}
+function ghostsFinish(win) {
+  // resultado frente a cada ghost
+  const me = { cleared: race.cleared, t: race.t, pos: race.pos };
+  const gs = race.rivals.filter(r => r.ghost);
+  const html = gs.map(r => {
+    const g = r.src; let txt, good;
+    if (me.cleared !== g.cleared) { good = me.cleared > g.cleared; txt = good ? `you went further (${me.cleared} vs ${g.cleared} stages)` : `went further (${g.cleared} vs ${me.cleared} stages)`; }
+    else if (me.cleared === RACE.STAGES) { const dt = (g.time / 1000) - me.t; good = dt > 0; txt = good ? `you beat them by ${dt.toFixed(1)} s` : `beat you by ${(-dt).toFixed(1)} s`; }
+    else { good = me.pos < g.pos; txt = good ? `you finished ahead (P${me.pos} vs P${g.pos})` : `finished ahead (P${g.pos} vs P${me.pos})`; }
+    return `<div class="rg-row ${good ? 'win' : 'lose'}"><span>👻 ${frEsc(r.name)}</span><i>${txt}</i></div>`;
+  }).join('');
+  const el = $('rr-ghosts'); if (el) el.innerHTML = html;
+  // subir tu ghost (el servidor solo lo guarda si mejora tu resultado en ese mundo)
+  const data = ghostEncode();
+  if (data && race.t > 5) {
+    withTimeout(rpc('ns_race_submit', { ...netIdentity(), p_world: save.world || 'neon', p_ver: GHOST.VER, p_cleared: race.cleared,
+      p_time_ms: Math.round(race.t * 1000), p_pos: race.pos, p_car: (run.setup && run.setup.car) || save.selected, p_data: data }), 8000)
+      .then(r => { if (r && r.saved) toast('👻 GHOST SAVED', 'your friends will race it', '#c08bff'); }).catch(() => {});
+  }
+}
+Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.ghostWorld = save.world || 'neon'; race.ghostSrc = list; } });
+
+/* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
    - Ranking: diario (reto), hoy, semana y siempre. Mejor marca por jugador.
    - Reto diario: mismo coche de serie, mismas zonas/túneles y misma hora del día
@@ -5933,7 +6018,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '0028f1cb';
+window.NS_BUILD = '400d9aad';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

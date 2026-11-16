@@ -691,6 +691,13 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
 #pitfx .pf-bar{width:220px;height:10px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden}
 #pitfx .pf-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffd23f,#3dff8a)}
 #pitfx small{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.1em;color:#9aa6c8}
+/* v23: ghosts */
+.rp-ghosts{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:.06em;color:#9aa6c8;text-align:center}
+.rp-ghosts b{color:#c08bff;margin:0 4px}
+#rr-ghosts{display:flex;flex-direction:column;gap:4px}
+.rg-row{display:flex;justify-content:space-between;gap:10px;padding:6px 10px;border-radius:8px;background:rgba(192,139,255,.12);border:1px solid rgba(192,139,255,.4);font-family:'Orbitron',sans-serif;font-size:11px;color:#e6d4ff}
+.rg-row i{font-style:normal;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px}
+.rg-row.win i{color:#3dff8a}.rg-row.lose i{color:#ff7a9a}
 </style>
 </head>
 <body>
@@ -764,9 +771,11 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
       <li><em>⚡</em><span>Rivals use nitro and block you. Follow one closely to catch his <b>slipstream</b> and refill nitro. Bumping costs speed.</span></li>
       <li><em>⛽</em><span>Fuel runs out with distance (nitro burns more). One station per stage: keep RIGHT to pit for 3 s. Fuel cans on the road give +15%. Every bump or crash costs fuel.</span></li>
       <li><em>⚠️</em><span>Watch the road: <b>puddles</b> make you aquaplane, <b>floods</b> slow you down (find the dry lane) and <b>accidents</b> block lanes.</span></li>
+      <li><em>👻</em><span>Up to 3 friends race with you as <b>ghosts</b> (their best run in this world). They don't collide but they count in the standings.</span></li>
       <li><em>🪙</em><span>Coins for every stage cleared, plus a podium bonus: 1st 1,500 · 2nd 900 · 3rd 600.</span></li>
     </ul>
     <div class="rp-meta"><span>CAR · <b id="rp-car">Red Sport</b></span><span id="rp-best">NOT RACED YET</span></div>
+    <div class="rp-ghosts" id="rp-ghosts">FRIEND GHOSTS · loading…</div>
     <button class="btn primary big" data-action="race-start">START RACE</button>
     <button class="btn ghost" data-action="race-back">BACK</button>
   </div>
@@ -776,6 +785,7 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     <div class="rr-hero"><div id="rr-title" class="rr-title">VICTORY!</div><div id="rr-pos">P1</div><small id="rr-sub"></small></div>
     <div class="rr-stats"><div><label>STAGES</label><b id="rr-stages">0/3</b></div><div><label>OVERTAKES</label><b id="rr-over">0</b></div><div><label>TOP KM/H</label><b id="rr-kmh">0</b></div><div><label>COINS</label><b id="rr-coins" class="yellow">+0</b></div></div>
     <div id="rr-board"></div>
+    <div id="rr-ghosts"></div>
     <div class="rr-btns"><button class="btn primary" data-action="race-retry">RACE AGAIN</button><button class="btn ghost" data-action="menu">MENU</button></div>
   </div>
 </div>
@@ -1063,15 +1073,15 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=117637a3e3'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=e8eedf1d6e'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10358752;
-  fetch('game.js?v=117637a3e3').then(function (r) {
+  var TOTAL = 10364509;
+  fetch('game.js?v=e8eedf1d6e').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
