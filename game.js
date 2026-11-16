@@ -4751,6 +4751,7 @@ const RACE = {
   WARN: 900,
 };
 /* rivales: nitro, bloqueos y rebufo */
+const RB = { TOP: 6, BEHIND: 3, AHEAD: 5, K: 0.07, MAXUP: 0.28, MAXDN: 0.14 };
 const RN = { TOP: 0.965, SPREAD: 0.16, BOOST: 1.36, DRAIN: 25, REGEN: 4.2, SLIP: 7 };
 const RIVAL_TAGS = ['NEO', 'KAI', 'VEX', 'RYU', 'LUX', 'JAX', 'ACE', 'REI', 'ZED', 'ONYX', 'NOVA', 'BLAZE', 'VOLT', 'AXEL', 'SORA', 'KAZE',
   'RONIN', 'VIPER', 'HEX', 'DRIFT', 'JINX', 'NYX', 'ORION', 'TAKA', 'MIRA', 'ZANE', 'KIRA', 'DASH', 'ECHO', 'FLUX', 'GHOST', 'HALO',
@@ -4851,6 +4852,7 @@ function raceRankAll() {
   all.sort((a, b) => b.d - a.d);
   all.forEach((e, k) => { if (e.r) e.r.pos = k + 1; });
   race.pos = all.findIndex(e => !e.r) + 1;
+  race.top = new Set(all.filter(e => e.r).slice(0, RB.TOP).map(e => e.r));
   race.board = all;
 }
 function raceInit() {
@@ -4888,7 +4890,7 @@ function updateRivals(dt) {
   if (!race.active) return;
   const going = state === 'playing' || state === 'gameover' || state === 'crashing';
   if (state === 'playing') race.t += dt;
-  const ref = raceRef() * (1 + 0.04 * race.stage), pd = player_d();
+  const ref = raceRef() * (1 + 0.05 * race.stage), pd = player_d();
   // 1) velocidad objetivo y avance
   for (const r of race.rivals) {
     let target = going && race.t > r.react ? ref * r.f * (1 + 0.025 * Math.sin(race.t * r.w + r.ph)) : 0;
@@ -4903,6 +4905,12 @@ function updateRivals(dt) {
       if (r.nitro > (near ? 30 : 65) && r.gapAhead > 35 && Math.random() < (near ? 0.6 : 0.2) * r.aggr) r.nOn = true;
     }
     if (r.nOn) target *= RN.BOOST;
+    // goma elástica: los mejores rivales nunca se alejan ni se quedan a más de ~5 s de ti
+    if (race.top && race.top.has(r) && going && race.t > 6 && !r.pit) {
+      const gs = (r.d - pd) / ref;
+      if (gs < -RB.BEHIND) target *= 1 + Math.min(RB.MAXUP, (-gs - RB.BEHIND) * RB.K);
+      else if (gs > RB.AHEAD) target *= 1 - Math.min(RB.MAXDN, (gs - RB.AHEAD) * RB.K * 0.5);
+    }
     const k = Math.floor(r.d / RACE.STAGE_LEN), sd = stationD(k);
     if (!r.pit && r.pitK !== k && going) {
       if (r.d > sd - FUEL.PIT_IN && r.d < sd) { r.pit = { k, sd, bay: sd + FUEL.BAY0 + (r.i % 5) * FUEL.BAY_GAP, ph: 'in', t: 0 }; r.pitK = k; r.lane = 3; r.chg = null; }
@@ -5204,23 +5212,23 @@ window.NSRace = { get OBS() { return OBS; }, race, RACE, raceRankAll, get pd() {
 const FUEL = {
   PER_M: 100 / 6800, NITRO: 2.4, CAN: 15, CANS: 5, LOW: 25, PIT_T: 3,
   AT: 0.55, PIT_IN: 55, PIT_OUT: 175, BAY0: 20, BAY_GAP: 8, P_BAY: 64,
-  HIT: 2, CRASH: 6, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 27, ENTRY: 4.4,
+  HIT: 2, CRASH: 6, RIVAL_PIT_T: 1.2, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 22, ENTRY: 4.4,
 };
 function stationD(k) { return (k + FUEL.AT) * RACE.STAGE_LEN; }
 function rivalPitTarget(r, target, dt) {
   const p = r.pit;
   if (p.ph === 'in') {
     if (p.bay - r.d < 0.8 && r.spd < 1.5) { p.ph = 'fill'; p.t = 0; return 0; }
-    return Math.min(FUEL.LIMIT + 4, Math.sqrt(2 * 12 * Math.max(0, p.bay - r.d)) + 0.5);
+    return Math.min(FUEL.LIMIT + 8, Math.sqrt(2 * 16 * Math.max(0, p.bay - r.d)) + 0.5);
   }
-  if (p.ph === 'fill') { p.t += dt; if (p.t >= FUEL.PIT_T) p.ph = 'out'; return 0; }
+  if (p.ph === 'fill') { p.t += dt; if (p.t >= FUEL.RIVAL_PIT_T) p.ph = 'out'; return 0; }
   if (r.d > p.sd + FUEL.PIT_OUT) {
     r.pit = null;
     if (r.model && Math.abs(r.x - LANES[3]) > 0.2) r.chg = { from: r.x, to: LANES[3], t: 0.3 };
     else r.x = LANES[3];
     r.lane = 3; return target;
   }
-  return r.d < p.sd + FUEL.PIT_OUT - 40 ? FUEL.LIMIT + 4 : target;
+  return r.d < p.sd + FUEL.PIT_OUT - 40 ? FUEL.LIMIT + 8 : target;
 }
 function rivalPitX(r) {
   const p = r.pit;
@@ -5925,7 +5933,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '3d7e933e';
+window.NS_BUILD = '1b5d3d7f';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
