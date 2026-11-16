@@ -10602,13 +10602,15 @@ sun.shadow.normalBias = 0.02;
 /* ---------- Sensación de velocidad ---------- */
 // Líneas de velocidad: tiras finas que pasan junto a la cámara (una sola llamada de dibujo).
 const Speed = (() => {
-  const N = IS_TOUCH ? 60 : 110;
-  const tex = canvasTex(8, 128, (x, w, h) => {
+  const N = IS_TOUCH ? 46 : 70;
+  // Cuña estilo anime: punta fina hacia el centro de la pantalla (arriba del lienzo = lejos), ancha y nítida por fuera
+  const tex = canvasTex(64, 256, (x, w, h) => {
+    x.clearRect(0, 0, w, h);
     const g = x.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.75, 'rgba(255,255,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-    x.fillStyle = g; x.fillRect(0, 0, w, h);
+    g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.25, 'rgba(255,255,255,0.85)'); g.addColorStop(0.85, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.beginPath(); x.moveTo(w / 2 - 1, 0); x.lineTo(w / 2 + 1, 0); x.lineTo(w, h); x.lineTo(0, h); x.closePath(); x.fill();
   }, false);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(0.75, 0.95, 1), transparent: true, opacity: 0,
+  const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(0.95, 1, 1), transparent: true, opacity: 0,
     blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false });
   const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // largo en z, ancho en x, normal +y
   const mesh = new THREE.InstancedMesh(geo, mat, N);
@@ -10618,20 +10620,20 @@ const Speed = (() => {
   const spawn = (l, far) => {
     // ángulo alrededor del eje de la cámara, evitando la franja inferior donde va el coche
     let a; do { a = Math.random() * Math.PI * 2; } while (Math.sin(a) < -0.35 && Math.abs(Math.cos(a)) < 0.75);
-    l.a = a; l.r = rand(2.6, 7.5); l.z = far ? rand(-90, 0) : rand(-90, -60); l.k = rand(0.8, 1.3); l.w = rand(0.025, 0.06);
+    l.a = a; l.r = rand(2.6, 7.5); l.z = far ? rand(-90, 0) : rand(-90, -60); l.k = rand(0.8, 1.3); l.w = rand(0.1, 0.26);
   };
   for (let i = 0; i < N; i++) { const l = {}; spawn(l, true); L.push(l); }
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), Z = new THREE.Vector3(0, 0, 1);
   const S = { amt: 0, group };
   S.update = (dt, sf, nitro) => {
     const on = !save.settings.reducedMotion && (state === 'playing') && Quality.level >= 1;
-    const want = on ? clamp((sf - 0.55) / 0.5, 0, 1) * 0.22 + nitro * 0.36 : 0;
-    S.amt = damp(S.amt, want, 4, dt);
+    const want = on ? nitro * 0.75 : 0; // solo con nitro
+    S.amt = damp(S.amt, want, want > S.amt ? 9 : 5, dt);
     group.visible = S.amt > 0.01;
     if (!group.visible) return;
     group.position.copy(camera.position); group.quaternion.copy(camera.quaternion);
     mat.opacity = S.amt;
-    const v = player.speed * (1.6 + nitro * 0.8), len = 2 + sf * 7 + nitro * 12;
+    const v = player.speed * 2.4, len = 9 + sf * 8;
     for (let i = 0; i < N; i++) {
       const l = L[i];
       l.z += v * l.k * dt;
