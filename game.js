@@ -10881,6 +10881,49 @@ const City = (() => {
   applyWorldNow = (id, pack) => { _aw(id, pack); City.world(id); };
 }
 
+/* ---------- Vallas publicitarias: anuncios propios, al azar ---------- */
+// Los anuncios extra son archivos aparte (img/ads/*.webp) que se cargan después del arranque.
+// Cada valla elige anuncio al azar cada vez que reaparece por delante.
+const Ads = (() => {
+  const A = { extra: [] };
+  const LIST = [['tiburon', [0.45, 0.85, 1]], ['titanic', [0.6, 0.8, 1]], ['despertador', [1, 0.6, 0.2]], ['agua', [0.5, 0.75, 1]]];
+  const BASE = SIGNS.length, W = 1024 / 372 / (8 / 3.5); // estas vallas son más anchas que las del juego
+  LIST.forEach(a => SIGNS.push({ glow: a[1] }));
+  SIGN_OBJS.forEach(o => {
+    o.panel = o.g.children[0]; o.base = o.si;
+    o.mat = basic({ map: signMats[o.si].map });
+    o.panel.material = o.panel.material.slice(); o.panel.material[4] = o.mat;
+    o.pz = o.g.position.z;
+  });
+  const assign = o => {
+    const ex = A.extra.length && Math.random() < 0.5 ? pick(A.extra) : null;
+    if (ex) { o.mat.map = ex.tex; o.si = BASE + ex.k; o.panel.scale.x = W; }
+    else { const k = Math.floor(Math.random() * signMats.length); o.mat.map = signMats[k].map; o.si = k % BASE; o.panel.scale.x = 1; }
+    o.mat.needsUpdate = true;
+  };
+  A.refresh = () => SIGN_OBJS.forEach(assign);
+  A.scroll = () => SIGN_OBJS.forEach(o => {
+    const z = o.g.position.z;
+    if (z < o.pz - 100) assign(o); // ha dado la vuelta: anuncio nuevo
+    o.pz = z; o.mat.color.copy(signMats[0].color);
+  });
+  A.load = () => {
+    const L = new THREE.TextureLoader();
+    LIST.forEach((a, k) => L.load('img/ads/' + a[0] + '.webp?v=' + (window.NS_BUILD || '1'), tex => {
+      tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+      A.extra.push({ tex, k });
+    }));
+  };
+  setTimeout(A.load, 2500);
+  return A;
+})();
+{
+  const _sw = scrollWorld;
+  scrollWorld = function (d, t) { _sw(d, t); Ads.scroll(); };
+  const _aw = applyWorldNow;
+  applyWorldNow = (id, pack) => { _aw(id, pack); Ads.refresh(); };
+}
+
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
