@@ -4751,8 +4751,8 @@ const RACE = {
   WARN: 900,
 };
 /* rivales: nitro, bloqueos y rebufo */
-const RB = { TOP: 6, BEHIND: 3, AHEAD: 5, K: 0.07, MAXUP: 0.28, MAXDN: 0.14 };
-const RN = { TOP: 0.965, SPREAD: 0.16, BOOST: 1.36, DRAIN: 25, REGEN: 4.2, SLIP: 7 };
+const RB = { TOP: 6, BEHIND: 2, AHEAD: 4, K: 0.07, MAXUP: 0.28, MAXDN: 0.14 };
+const RN = { TOP: 0.98, SPREAD: 0.16, BOOST: 1.36, DRAIN: 25, REGEN: 4.2, SLIP: 7 };
 const RIVAL_TAGS = ['NEO', 'KAI', 'VEX', 'RYU', 'LUX', 'JAX', 'ACE', 'REI', 'ZED', 'ONYX', 'NOVA', 'BLAZE', 'VOLT', 'AXEL', 'SORA', 'KAZE',
   'RONIN', 'VIPER', 'HEX', 'DRIFT', 'JINX', 'NYX', 'ORION', 'TAKA', 'MIRA', 'ZANE', 'KIRA', 'DASH', 'ECHO', 'FLUX', 'GHOST', 'HALO',
   'IRIS', 'JUNO', 'KOJI', 'LYNX', 'MAKO', 'NERO', 'OMEN', 'PIKE', 'RAVEN', 'SAGE', 'TORA', 'UMA', 'VOID', 'WREN', 'XENA', 'YUKI', 'ZORA'];
@@ -5212,14 +5212,14 @@ window.NSRace = { get OBS() { return OBS; }, race, RACE, raceRankAll, get pd() {
 const FUEL = {
   PER_M: 100 / 6800, NITRO: 2.4, CAN: 15, CANS: 5, LOW: 25, PIT_T: 3,
   AT: 0.55, PIT_IN: 55, PIT_OUT: 175, BAY0: 20, BAY_GAP: 8, P_BAY: 64,
-  HIT: 2, CRASH: 6, RIVAL_PIT_T: 1.2, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 22, ENTRY: 4.4,
+  HIT: 2, CRASH: 6, RIVAL_PIT_T: 0.4, X_FAST: 10.5, X_BAY: 12.6, LIMIT: 22, ENTRY: 4.4,
 };
 function stationD(k) { return (k + FUEL.AT) * RACE.STAGE_LEN; }
 function rivalPitTarget(r, target, dt) {
   const p = r.pit;
   if (p.ph === 'in') {
     if (p.bay - r.d < 0.8 && r.spd < 1.5) { p.ph = 'fill'; p.t = 0; return 0; }
-    return Math.min(FUEL.LIMIT + 8, Math.sqrt(2 * 16 * Math.max(0, p.bay - r.d)) + 0.5);
+    return Math.min(FUEL.LIMIT + 16, Math.sqrt(2 * 22 * Math.max(0, p.bay - r.d)) + 0.5);
   }
   if (p.ph === 'fill') { p.t += dt; if (p.t >= FUEL.RIVAL_PIT_T) p.ph = 'out'; return 0; }
   if (r.d > p.sd + FUEL.PIT_OUT) {
@@ -5228,7 +5228,7 @@ function rivalPitTarget(r, target, dt) {
     else r.x = LANES[3];
     r.lane = 3; return target;
   }
-  return r.d < p.sd + FUEL.PIT_OUT - 40 ? FUEL.LIMIT + 8 : target;
+  return r.d < p.sd + FUEL.PIT_OUT - 90 ? FUEL.LIMIT + 16 : target;
 }
 function rivalPitX(r) {
   const p = r.pit;
@@ -5933,7 +5933,7 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '1b5d3d7f';
+window.NS_BUILD = '0028f1cb';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
