@@ -6018,7 +6018,25 @@ function mvImport() {
   location.reload();
 }
 
-window.NS_BUILD = '400d9aad';
+/* v24: mudanza automática desde el enlace antiguo (ivanmardones77.github.io/kittspeed)
+   La página antigua lee el progreso guardado en su dominio y abre el nuevo con #nsmove=<código>. */
+(function autoMove() {
+  const hp = new URLSearchParams(location.hash.slice(1)), code = hp.get('nsmove');
+  if (!code) return;
+  hp.delete('nsmove');
+  const rest = hp.toString();
+  history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
+  let o; try { o = mvParse(code); } catch (e) { return; }
+  const mine = save.stats || {}, theirs = o.stats || {};
+  const fresh = !(mine.runs > 0), better = (theirs.totalDist || 0) > (mine.totalDist || 0);
+  if (!fresh && !better) return;
+  store.set(SAVE_KEY, JSON.stringify(o));
+  try { sessionStorage.setItem('ns_moved', '1'); } catch (e) {}
+  location.reload();
+})();
+try { if (sessionStorage.getItem('ns_moved')) { sessionStorage.removeItem('ns_moved'); setTimeout(() => toast('PROGRESS MOVED', 'welcome to neonspeed.github.io', '#3dff8a'), 1500); } } catch (e) {}
+
+window.NS_BUILD = '54751aeb';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();

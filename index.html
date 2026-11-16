@@ -8,7 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<style>
+<script>(function(){try{var h=new URLSearchParams(location.hash.slice(1)),m=h.get('lsmove');if(!m)return;h.delete('lsmove');var o=JSON.parse(decodeURIComponent(escape(atob(m))));var n=0;for(var k in o){if(localStorage.getItem(k)===null){localStorage.setItem(k,o[k]);n++;}}var r=h.toString();history.replaceState(null,'',location.pathname+location.search+(r?'#'+r:''));if(n)sessionStorage.setItem('ls_moved',String(n));}catch(e){}})();
+</script><style>
 :root{
   --cyan:#00f0ff; --pink:#ff2bd6; --yellow:#ffd23f; --green:#3dff8a; --red:#ff3b5c; --violet:#9b5cff;
   --panel:rgba(8,10,30,.55); --line:rgba(255,255,255,.14);
@@ -1073,15 +1074,15 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=e8eedf1d6e'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=c898fc1a5f'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10364509;
-  fetch('game.js?v=e8eedf1d6e').then(function (r) {
+  var TOTAL = 10365551;
+  fetch('game.js?v=c898fc1a5f').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {
