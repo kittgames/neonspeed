@@ -5725,7 +5725,7 @@ const Post = (() => {
       s += texture2D(tDiffuse, vUv + dir * 1.3846153846).rgb * 0.3162162162; s += texture2D(tDiffuse, vUv - dir * 1.3846153846).rgb * 0.3162162162;
       s += texture2D(tDiffuse, vUv + dir * 3.2307692308).rgb * 0.0702702703; s += texture2D(tDiffuse, vUv - dir * 3.2307692308).rgb * 0.0702702703;
       gl_FragColor = vec4(s, 1.0); }`, { tDiffuse: { value: null }, dir: { value: new THREE.Vector2() } });
-  const comp = mat(`uniform sampler2D tScene, tB1, tB2; uniform float strength, w1, w2, vignette, aberr, radial, flash, sat, contrast, warm;
+  const comp = mat(`uniform sampler2D tScene, tB1, tB2, tB3; uniform float w3, bsat; uniform float strength, w1, w2, vignette, aberr, radial, flash, sat, contrast, warm;
     varying vec2 vUv;
     void main(){
       vec2 uv = vUv, dc = uv - 0.5;
@@ -5736,7 +5736,9 @@ const Post = (() => {
         c = acc / 6.0;
       } else c = texture2D(tScene, uv).rgb;
       if (aberr > 0.002) { c.r = mix(c.r, texture2D(tScene, uv + dc * aberr * 0.014).r, 0.85); c.b = mix(c.b, texture2D(tScene, uv - dc * aberr * 0.014).b, 0.85); }
-      c += (texture2D(tB1, uv).rgb * w1 + texture2D(tB2, uv).rgb * w2) * strength;
+      vec3 bl = texture2D(tB1, uv).rgb * w1 + texture2D(tB2, uv).rgb * w2 + texture2D(tB3, uv).rgb * w3;
+      bl = max(mix(vec3(dot(bl, vec3(0.299, 0.587, 0.114))), bl, bsat), 0.0);
+      c += bl * strength;
       float l = dot(c, vec3(0.299, 0.587, 0.114));
       c = mix(vec3(l), c, sat);
       c = (c - 0.5) * contrast + 0.5;
@@ -5744,24 +5746,27 @@ const Post = (() => {
       c += flash * vec3(0.7, 0.78, 1.0);
       float v = smoothstep(0.92, 0.28, length(dc * vec2(1.0, 0.85)));
       c *= mix(1.0, v, vignette);
+      c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0; /* dithering: sin bandas */
       gl_FragColor = vec4(c, 1.0);
     }`, {
-    tScene: { value: null }, tB1: { value: null }, tB2: { value: null }, strength: { value: 0.9 }, w1: { value: 1 }, w2: { value: 1.2 },
+    tScene: { value: null }, tB1: { value: null }, tB2: { value: null }, tB3: { value: null }, w3: { value: 0 }, bsat: { value: 1.25 }, strength: { value: 0.9 }, w1: { value: 1 }, w2: { value: 1.2 },
     vignette: { value: 0.55 }, aberr: { value: 0 }, radial: { value: 0 }, flash: { value: 0 }, sat: { value: 1.1 }, contrast: { value: 1.05 }, warm: { value: 0 },
   });
   const qScene = new THREE.Scene(), qCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), comp); quad.frustumCulled = false; qScene.add(quad);
   const opts = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false };
-  let main = null, A1, B1, A2, B2, W = 0, H = 0;
+  let main = null, A1, B1, A2, B2, A3, B3, W = 0, H = 0;
   const P = { enabled: true, level: 2, u: comp.uniforms, b: bright.uniforms };
   function make() {
-    [main, A1, B1, A2, B2].forEach(t => t && t.dispose());
+    [main, A1, B1, A2, B2, A3, B3].forEach(t => t && t.dispose());
     main = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, samples: P.level >= 2 ? 4 : 0 });
     main.isXRRenderTarget = true; /* r187: tone mapping + sRGB en el shader, como en r128 */
     main.texture.colorSpace = THREE.SRGBColorSpace; main.texture.internalFormat = 'RGBA8';
     const hw = Math.max(1, W >> 1), hh = Math.max(1, H >> 1), qw = Math.max(1, W >> 2), qh = Math.max(1, H >> 2);
     A1 = new THREE.WebGLRenderTarget(hw, hh, opts); B1 = new THREE.WebGLRenderTarget(hw, hh, opts);
     A2 = new THREE.WebGLRenderTarget(qw, qh, opts); B2 = new THREE.WebGLRenderTarget(qw, qh, opts);
+    const ew = Math.max(1, W >> 3), eh = Math.max(1, H >> 3);
+    A3 = new THREE.WebGLRenderTarget(ew, eh, opts); B3 = new THREE.WebGLRenderTarget(ew, eh, opts);
   }
   function pass(m, target) { quad.material = m; renderer.setRenderTarget(target); renderer.render(qScene, qCam); }
   function blurPass(src, dst, dx, dy) { blur.uniforms.tDiffuse.value = src.texture; blur.uniforms.dir.value.set(dx / src.width, dy / src.height); pass(blur, dst); }
@@ -5783,11 +5788,14 @@ const Post = (() => {
       bright.uniforms.tDiffuse.value = main.texture; pass(bright, A1);
       blurPass(A1, B1, 1, 0); blurPass(B1, A1, 0, 1);
       blurPass(A1, A2, 1.5, 0); blurPass(A2, B2, 0, 1.5); blurPass(B2, A2, 2, 0); blurPass(A2, B2, 0, 2);
-      comp.uniforms.tB1.value = A1.texture; comp.uniforms.tB2.value = B2.texture; comp.uniforms.w1.value = 1; comp.uniforms.w2.value = 1.2;
+      blurPass(B2, A3, 1, 0); blurPass(A3, B3, 0, 1); blurPass(B3, A3, 2, 0); blurPass(A3, B3, 0, 2);
+      comp.uniforms.tB1.value = A1.texture; comp.uniforms.tB2.value = B2.texture; comp.uniforms.tB3.value = B3.texture;
+      comp.uniforms.w1.value = 1; comp.uniforms.w2.value = 1.2; comp.uniforms.w3.value = 1.1;
     } else {
       bright.uniforms.tDiffuse.value = main.texture; pass(bright, A2);
       blurPass(A2, B2, 1, 0); blurPass(B2, A2, 0, 1); blurPass(A2, B2, 2, 0); blurPass(B2, A2, 0, 2);
-      comp.uniforms.tB1.value = A2.texture; comp.uniforms.tB2.value = A2.texture; comp.uniforms.w1.value = 0.9; comp.uniforms.w2.value = 0.9;
+      comp.uniforms.tB1.value = A2.texture; comp.uniforms.tB2.value = A2.texture; comp.uniforms.tB3.value = A2.texture;
+      comp.uniforms.w1.value = 0.9; comp.uniforms.w2.value = 0.9; comp.uniforms.w3.value = 0;
     }
     comp.uniforms.tScene.value = main.texture;
     pass(comp, null);
@@ -6869,8 +6877,8 @@ function updateCamera(dt) {
   if (save.settings.reducedMotion) { u.radial.value = 0; u.aberr.value = 0; }
   u.warm.value = Zones.tunnel;
   const glowAmt = Math.max(todState.night, Zones.tunnel * 0.8);
-  Post.b.threshold.value = lerp(0.93, 0.56, glowAmt);
-  u.strength.value = lerp(0.35, 1.0, glowAmt) + Weather.flash * 0.3;
+  Post.b.threshold.value = lerp(0.88, 0.5, glowAmt);
+  u.strength.value = lerp(0.42, 1.2, glowAmt) + Weather.flash * 0.3;
   // Garage view offset so the car is not hidden behind the panel
   const want = state === 'garage' ? (innerWidth > innerHeight ? 'land' : 'port') : null;
   if (want !== viewOffset) {
@@ -10529,6 +10537,202 @@ Object.assign(actions, {
 setTimeout(() => pushIntro(false), 3500);
 
 window.NS_BUILD = '1cd79fbf';
+/* =====================================================================
+   PULIDO GRÁFICO (solo build r187)
+   - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
+     sol, luna, tormenta y relámpagos) en lugar de un cubo de degradado de 64 px.
+   - Sombras más finas y suaves en calidad alta.
+   ===================================================================== */
+const Polish = (() => {
+  const P = { on: false, rt: null, last: -1e9, bakes: 0 };
+  const pm = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  const envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 48, 24), skyMat);
+  envSky.frustumCulled = false; envScene.add(envSky);
+  const GRAD = { day: ENV.day, night: ENV.night };
+
+  function setEnv(tex) {
+    ENV.day = tex || GRAD.day; ENV.night = tex || GRAD.night;
+    const cur = tex || ENV[ENV.current];
+    envMats.forEach(m => {
+      const o = m.envMap; if (o === cur) return;
+      // recompilar solo si cambia el tipo o el tamaño del mapa (cubo de degradado ↔ PMREM)
+      const remake = !o || !!o.isCubeTexture !== !!cur.isCubeTexture || (o.image && cur.image && o.image.height !== cur.image.height);
+      m.envMap = cur; if (remake) m.needsUpdate = true;
+    });
+  }
+  function bake() {
+    const old = P.rt;
+    P.rt = pm.fromScene(envScene, 0, 0.1, 100, { size: Quality.level >= 3 ? 128 : 64 });
+    setEnv(P.rt.texture);
+    if (old) old.dispose();
+    P.bakes++;
+  }
+  P.tick = () => {
+    const on = Quality.level >= 2 && !P.off;
+    if (on !== P.on) {
+      P.on = on;
+      if (!on) { setEnv(null); if (P.rt) { P.rt.dispose(); P.rt = null; } }
+      P.last = -1e9;
+    }
+    if (!on) return;
+    // Solo se rehace cuando el cielo cambia de verdad (hora, tormenta, mundo), como mucho cada 4 s:
+    // regenerarlo es caro y en móvil daría tirones.
+    const u = skyMat.uniforms, q = v => Math.round(v * 8);
+    const key = [q(u.pw.value.x), q(u.pw.value.y), q(u.pw.value.z), q(u.pw.value.w), q(u.night.value), q(u.storm.value), q(u.sunDir.value.y), u.pano.value, u.p0.value && u.p0.value.id].join(',');
+    const now = performance.now() / 1000;
+    if ((key !== P.key && now - P.last > 4) || P.last < 0) { P.key = key; P.last = now; bake(); }
+  };
+  P.dirty = () => { P.last = -1e9; P.key = null; };
+  return P;
+})();
+
+// Sombras: mapa 2048 y filtro suave (r187: PCF con disco de Vogel; radius en texels)
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.radius = 2.5;
+sun.shadow.normalBias = 0.02;
+
+{
+  const _render = Post.render;
+  Post.render = () => { Polish.tick(); _render(); };
+  const _setWorld = setWorld;
+  setWorld = id => _setWorld(id).then(w => { Polish.dirty(); return w; });
+}
+
+/* ---------- Sensación de velocidad ---------- */
+// Líneas de velocidad: tiras finas que pasan junto a la cámara (una sola llamada de dibujo).
+const Speed = (() => {
+  const N = IS_TOUCH ? 60 : 110;
+  const tex = canvasTex(8, 128, (x, w, h) => {
+    const g = x.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.75, 'rgba(255,255,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.fillRect(0, 0, w, h);
+  }, false);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(0.75, 0.95, 1), transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false });
+  const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // largo en z, ancho en x, normal +y
+  const mesh = new THREE.InstancedMesh(geo, mat, N);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.frustumCulled = false; mesh.renderOrder = 7;
+  const group = new THREE.Group(); group.add(mesh); scene.add(group);
+  const L = [];
+  const spawn = (l, far) => {
+    // ángulo alrededor del eje de la cámara, evitando la franja inferior donde va el coche
+    let a; do { a = Math.random() * Math.PI * 2; } while (Math.sin(a) < -0.35 && Math.abs(Math.cos(a)) < 0.75);
+    l.a = a; l.r = rand(2.6, 7.5); l.z = far ? rand(-90, 0) : rand(-90, -60); l.k = rand(0.8, 1.3); l.w = rand(0.025, 0.06);
+  };
+  for (let i = 0; i < N; i++) { const l = {}; spawn(l, true); L.push(l); }
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), Z = new THREE.Vector3(0, 0, 1);
+  const S = { amt: 0, group };
+  S.update = (dt, sf, nitro) => {
+    const on = !save.settings.reducedMotion && (state === 'playing') && Quality.level >= 1;
+    const want = on ? clamp((sf - 0.55) / 0.5, 0, 1) * 0.22 + nitro * 0.36 : 0;
+    S.amt = damp(S.amt, want, 4, dt);
+    group.visible = S.amt > 0.01;
+    if (!group.visible) return;
+    group.position.copy(camera.position); group.quaternion.copy(camera.quaternion);
+    mat.opacity = S.amt;
+    const v = player.speed * (1.6 + nitro * 0.8), len = 2 + sf * 7 + nitro * 12;
+    for (let i = 0; i < N; i++) {
+      const l = L[i];
+      l.z += v * l.k * dt;
+      if (l.z > 4) spawn(l, false);
+      p.set(Math.cos(l.a) * l.r, Math.sin(l.a) * l.r, l.z);
+      q.setFromAxisAngle(Z, l.a - Math.PI / 2);
+      s.set(l.w, 1, len * l.k);
+      m4.compose(p, q, s); mesh.setMatrixAt(i, m4);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  };
+  return S;
+})();
+{
+  const _uc = updateCamera;
+  let kick = 0, wasNitro = false;
+  updateCamera = dt => {
+    _uc(dt);
+    const sf = clamp(player.speed / P.maxSpeed, 0, 1.6), playing = state === 'playing';
+    const nitro = playing && player.nitroOn ? 1 : 0, calm = save.settings.reducedMotion;
+    if (nitro && !wasNitro) kick = 1; // golpe al encender el nitro
+    wasNitro = !!nitro; kick = Math.max(0, kick - dt * 2.2);
+    Speed.update(dt, sf, nitro);
+    if (calm || !playing) return;
+    // vibración fina de cámara, más fuerte con nitro
+    const amp = clamp((sf - 0.5) / 0.6, 0, 1) * 0.018 + nitro * 0.045 + kick * 0.08, t = simTime * 38;
+    camera.position.x += Math.sin(t * 1.3) * Math.sin(t * 0.71) * amp;
+    camera.position.y += Math.sin(t * 1.7 + 1.3) * Math.sin(t * 0.53) * amp * 0.8;
+    // desenfoque radial también a velocidad alta sin nitro, y un golpe al activar el nitro
+    const u = Post.u;
+    u.radial.value = Math.max(u.radial.value, clamp((sf - 0.6) / 0.5, 0, 1) * 0.18 + kick * 0.6);
+    u.aberr.value = Math.max(u.aberr.value, kick * 0.9);
+  };
+}
+
+/* ---------- Carretera con reflejos (noche y lluvia) ---------- */
+// Se dibuja la escena reflejada en el plano del asfalto a baja resolución y el asfalto la muestra,
+// estirada en vertical y deformada por su relieve, como el reflejo de neones en asfalto mojado.
+const Mirror = (() => {
+  const M = { amt: 0, frame: 0 };
+  const cam = new THREE.PerspectiveCamera();
+  cam.matrixAutoUpdate = false; cam.matrixWorldAutoUpdate = false;
+  const FLIP_Y = new THREE.Matrix4().makeScale(1, -1, 1); // espejo en y = 0 (y volteo de la proyección)
+  let rt = null;
+  const U = { tRefl: { value: null }, uReflAmt: { value: 0 }, uReflRes: { value: new THREE.Vector2(1, 1) }, uReflWet: { value: 0 } };
+  const rm = road.material;
+  rm.onBeforeCompile = sh => {
+    bendShader(sh);
+    Object.assign(sh.uniforms, U);
+    sh.fragmentShader = 'uniform sampler2D tRefl; uniform float uReflAmt, uReflWet; uniform vec2 uReflRes;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  if (uReflAmt > 0.001) {
+    vec2 suv = gl_FragCoord.xy / uReflRes; suv.y = 1.0 - suv.y;
+    suv.x += normal.x * 0.035;
+    vec3 rc = vec3(0.0); float st = 0.012 + 0.05 * uReflWet;
+    for (int i = 0; i < 6; i++) { float o = (float(i) - 1.5) * st; rc += texture2D(tRefl, suv + vec2(0.0, o)).rgb; }
+    rc /= 6.0;
+    float fres = 0.35 + 0.65 * pow(1.0 - clamp(abs(normalize(vViewPosition).y), 0.0, 1.0), 2.0);
+    totalEmissiveRadiance += rc * uReflAmt * fres;
+  }`);
+  };
+  rm.customProgramCacheKey = () => 'road-refl';
+  rm.needsUpdate = true;
+  const hideList = () => [road, grass, poolMesh, reflMesh, rainLines, tFloor, Speed.group].filter(Boolean);
+  const size = new THREE.Vector2();
+  M.render = () => {
+    const night = todState.night, wet = Weather.wet;
+    let want = Quality.level >= 2 && (state === 'playing' || state === 'countdown' || state === 'crashing' || state === 'paused') ? Math.max(night * 0.2, wet * 0.5) * (1 - Zones.tunnel * 0.6) : 0;
+    if (M.off) want = 0;
+    M.amt = want; U.uReflAmt.value = want; U.uReflWet.value = wet;
+    if (want < 0.02) return;
+    renderer.getDrawingBufferSize(size); U.uReflRes.value.copy(size);
+    const div = Quality.level >= 3 ? 2 : 4, w = Math.max(1, size.x / div | 0), h = Math.max(1, size.y / div | 0);
+    if (!rt || rt.width !== w || rt.height !== h) {
+      if (rt) rt.dispose();
+      rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true });
+      U.tRefl.value = rt.texture;
+    }
+    if (Quality.level < 3 && (M.frame++ % 3)) return; // en móvil, el reflejo se actualiza uno de cada tres fotogramas
+    camera.updateMatrixWorld();
+    cam.matrixWorld.multiplyMatrices(FLIP_Y, camera.matrixWorld);
+    cam.matrixWorldInverse.multiplyMatrices(camera.matrixWorldInverse, FLIP_Y);
+    cam.projectionMatrix.multiplyMatrices(FLIP_Y, camera.projectionMatrix);
+    cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+    const hid = hideList(), vis = hid.map(o => o.visible);
+    hid.forEach(o => { o.visible = false; });
+    const blobVis = MAT.blob.visible; MAT.blob.visible = false;
+    const au = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false; // reutiliza las sombras del fotograma
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam);
+    renderer.setRenderTarget(prev); renderer.shadowMap.autoUpdate = au;
+    hid.forEach((o, i) => { o.visible = vis[i]; }); MAT.blob.visible = blobVis;
+  };
+  return M;
+})();
+{
+  const _render = Post.render;
+  Post.render = () => { Mirror.render(); _render(); };
+}
+
+window.__nsPolish = { Polish, Mirror, Speed, sun, renderer };
+
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
