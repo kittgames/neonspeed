@@ -10724,6 +10724,56 @@ const CarBloom = (() => {
   [player.model, ...traffic.map(v => v.model)].forEach(m => CarBloom.tree(m && (m.root || m.body)));
 }
 
+/* ---------- Agua ---------- */
+// Oleaje procedural animado (4 trenes de olas + rizado fino), reflejo del cielo con Fresnel físico,
+// destellos del sol y la luna, color según la cresta y espuma ligera. Sin texturas.
+const Water = (() => {
+  const U = { uWT: { value: 0 }, uWDeep: { value: new THREE.Color() }, uWCrest: { value: new THREE.Color() } };
+  const m = waterMat;
+  m.map = null; m.metalness = 0; m.roughness = 0.1; m.envMapIntensity = 1.15; m.color.set(0xffffff);
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    prev(sh, r);
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = 'varying vec2 vWxz;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vWxz = (mat3(modelMatrix) * position).xz;');
+    sh.fragmentShader = `varying vec2 vWxz; uniform float uWT; uniform vec3 uWDeep, uWCrest;
+vec3 nsWv(vec2 p, vec2 d, float k, float sp, float a) { float ph = dot(p, d) * k + uWT * sp; return vec3(d * (k * a * cos(ph)), a * sin(ph)); }
+float nsWh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float nsWn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(nsWh(i), nsWh(i + vec2(1.0, 0.0)), f.x), mix(nsWh(i + vec2(0.0, 1.0)), nsWh(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 nsWater = vec3(0.0);
+` + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  {
+    float wd = length(vViewPosition), fine = clamp(60.0 / wd, 0.0, 1.0);
+    vec3 w = nsWv(vWxz, normalize(vec2(1.0, 0.35)), 0.22, 0.9, 0.42) + nsWv(vWxz, normalize(vec2(-0.6, 1.0)), 0.41, 1.25, 0.2)
+           + (nsWv(vWxz, normalize(vec2(0.3, -1.0)), 1.3, 2.1, 0.06) + nsWv(vWxz, normalize(vec2(-1.0, -0.2)), 2.9, 3.0, 0.025)) * fine;
+    vec2 rp = vWxz * 1.6 + vec2(uWT * 0.5, -uWT * 0.35); float e = 0.35;
+    float n0 = nsWn(rp) + 0.5 * nsWn(rp * 2.3 + 11.0);
+    vec2 rg = vec2(nsWn(rp + vec2(e, 0.0)) + 0.5 * nsWn((rp + vec2(e, 0.0)) * 2.3 + 11.0) - n0, nsWn(rp + vec2(0.0, e)) + 0.5 * nsWn((rp + vec2(0.0, e)) * 2.3 + 11.0) - n0) / e;
+    w.xy += rg * 0.085 * fine;
+    nsWater = w;
+    float crest = smoothstep(0.1, 0.75, w.z);
+    float foam = smoothstep(0.66, 0.95, w.z + (n0 - 0.75) * 0.5) * fine;
+    diffuseColor.rgb = mix(uWDeep, uWCrest, crest) + foam * 0.3;
+  }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  normal = normalize((viewMatrix * vec4(normalize(vec3(-nsWater.x, 1.0, -nsWater.y)), 0.0)).xyz);`);
+  };
+  m.customProgramCacheKey = () => 'water';
+  m.needsUpdate = true;
+  const DAY = [col(0x0b3a52), col(0x2f8f9c)], NIGHT = [col(0x04101f), col(0x12304a)];
+  return { tick() {
+    U.uWT.value = simTime;
+    const n = todState.night;
+    U.uWDeep.value.copy(DAY[0]).lerp(NIGHT[0], n); U.uWCrest.value.copy(DAY[1]).lerp(NIGHT[1], n);
+  } };
+})();
+{
+  const _render = Post.render;
+  Post.render = () => { Water.tick(); _render(); };
+}
+
 /* =====================================================================
    CIUDAD: edificios con forma y detalle
    - Planta baja con escaparates, acera, cornisa, torres con retranqueo
@@ -10992,6 +11042,7 @@ const Drift = (() => {
     D.kind = 0;
     const gentle = () => (Math.random() < 0.3 ? 0 : rand(-1, 1) * 0.0011);
     if (!ok() || (run.dist || 0) < 500) return gentle();
+    if (Zones.list.some(z => z.type === 'bridge' || z.type === 'tunnel')) return gentle(); // en puentes y túneles la estructura se deformaría
     const r = Math.random(), s = Math.random() < 0.5 ? -1 : 1;
     if (lastTight) { lastTight = false; return Math.random() < 0.6 ? 0 : rand(-1, 1) * 0.0008; } // respiro tras una cerrada
     if (r < 0.2) return 0;
