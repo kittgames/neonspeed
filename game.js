@@ -10724,56 +10724,6 @@ const CarBloom = (() => {
   [player.model, ...traffic.map(v => v.model)].forEach(m => CarBloom.tree(m && (m.root || m.body)));
 }
 
-/* ---------- Agua ---------- */
-// Oleaje procedural animado (4 trenes de olas + rizado fino), reflejo del cielo con Fresnel físico,
-// destellos del sol y la luna, color según la cresta y espuma ligera. Sin texturas.
-const Water = (() => {
-  const U = { uWT: { value: 0 }, uWDeep: { value: new THREE.Color() }, uWCrest: { value: new THREE.Color() } };
-  const m = waterMat;
-  m.map = null; m.metalness = 0; m.roughness = 0.1; m.envMapIntensity = 1.15; m.color.set(0xffffff);
-  const prev = m.onBeforeCompile;
-  m.onBeforeCompile = (sh, r) => {
-    prev(sh, r);
-    Object.assign(sh.uniforms, U);
-    sh.vertexShader = 'varying vec2 vWxz;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vWxz = (mat3(modelMatrix) * position).xz;');
-    sh.fragmentShader = `varying vec2 vWxz; uniform float uWT; uniform vec3 uWDeep, uWCrest;
-vec3 nsWv(vec2 p, vec2 d, float k, float sp, float a) { float ph = dot(p, d) * k + uWT * sp; return vec3(d * (k * a * cos(ph)), a * sin(ph)); }
-float nsWh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float nsWn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(nsWh(i), nsWh(i + vec2(1.0, 0.0)), f.x), mix(nsWh(i + vec2(0.0, 1.0)), nsWh(i + vec2(1.0, 1.0)), f.x), f.y); }
-vec3 nsWater = vec3(0.0);
-` + sh.fragmentShader
-      .replace('#include <color_fragment>', `#include <color_fragment>
-  {
-    float wd = length(vViewPosition), fine = clamp(60.0 / wd, 0.0, 1.0);
-    vec3 w = nsWv(vWxz, normalize(vec2(1.0, 0.35)), 0.22, 0.9, 0.42) + nsWv(vWxz, normalize(vec2(-0.6, 1.0)), 0.41, 1.25, 0.2)
-           + (nsWv(vWxz, normalize(vec2(0.3, -1.0)), 1.3, 2.1, 0.06) + nsWv(vWxz, normalize(vec2(-1.0, -0.2)), 2.9, 3.0, 0.025)) * fine;
-    vec2 rp = vWxz * 1.6 + vec2(uWT * 0.5, -uWT * 0.35); float e = 0.35;
-    float n0 = nsWn(rp) + 0.5 * nsWn(rp * 2.3 + 11.0);
-    vec2 rg = vec2(nsWn(rp + vec2(e, 0.0)) + 0.5 * nsWn((rp + vec2(e, 0.0)) * 2.3 + 11.0) - n0, nsWn(rp + vec2(0.0, e)) + 0.5 * nsWn((rp + vec2(0.0, e)) * 2.3 + 11.0) - n0) / e;
-    w.xy += rg * 0.085 * fine;
-    nsWater = w;
-    float crest = smoothstep(0.1, 0.75, w.z);
-    float foam = smoothstep(0.66, 0.95, w.z + (n0 - 0.75) * 0.5) * fine;
-    diffuseColor.rgb = mix(uWDeep, uWCrest, crest) + foam * 0.3;
-  }`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-  normal = normalize((viewMatrix * vec4(normalize(vec3(-nsWater.x, 1.0, -nsWater.y)), 0.0)).xyz);`);
-  };
-  m.customProgramCacheKey = () => 'water';
-  m.needsUpdate = true;
-  const DAY = [col(0x0b3a52), col(0x2f8f9c)], NIGHT = [col(0x04101f), col(0x12304a)];
-  return { tick() {
-    U.uWT.value = simTime;
-    const n = todState.night;
-    U.uWDeep.value.copy(DAY[0]).lerp(NIGHT[0], n); U.uWCrest.value.copy(DAY[1]).lerp(NIGHT[1], n);
-  } };
-})();
-{
-  const _render = Post.render;
-  Post.render = () => { Water.tick(); _render(); };
-}
-
 /* =====================================================================
    CIUDAD: edificios con forma y detalle
    - Planta baja con escaparates, acera, cornisa, torres con retranqueo
@@ -10873,7 +10823,7 @@ const City = (() => {
     crownN[2] = crownN[3] = 0;
     BLD.forEach((b, i) => {
       const c = b.c;
-      if (b.hidden) { [podium, slab, parapet, crownCap, bulk, mast, tank, beacon].forEach(m => off(m, i)); off(ac, i * 2); off(ac, i * 2 + 1); return; }
+      if (b.hidden || (C.seaSide && b.x < 0)) { [podium, slab, parapet, crownCap, bulk, mast, tank, beacon].forEach(m => off(m, i)); off(ac, i * 2); off(ac, i * 2 + 1); return; }
       const x = b.x, z = b.z;
       setInst(slab, i, x, 0, z, b.w + 7, 0.2, b.d + 7);
       setInst(podium, i, x, 0, z, b.w + 0.7, 4.2, b.d + 0.7);
@@ -10909,7 +10859,7 @@ const City = (() => {
   C.scroll = d => {
     FAR.forEach((f, i) => {
       const z = f.z + d; f.z = wrap(z); if (z > WRAP_Z) newFar(f);
-      const h = ZONE_HIDE(f.z, 'building', f.d / 2 + 2);
+      const h = ZONE_HIDE(f.z, 'building', f.d / 2 + 2) || (C.seaSide && f.x < 0);
       setInst(farMesh, i, f.x, h ? -300 : 0, f.z, f.w, f.h, f.d);
     });
     farMesh.instanceMatrix.needsUpdate = true;
@@ -11102,6 +11052,111 @@ const Drift = (() => {
   updatePlayerVisual = function (dt, ws) { _uv(dt, ws); if (Drift.yaw) playerModel.root.rotation.y += Drift.yaw; };
 }
 window.__nsPolish.Drift = Drift; window.__nsPolish.bend = bend;
+
+/* =====================================================================
+   AGUA: un solo shader para el río de los puentes, el mar de Miami y los charcos
+   Oleaje procedural animado, reflejo del cielo con Fresnel físico, destellos, color por cresta y espuma.
+   Sin texturas.
+   ===================================================================== */
+const Water = (() => {
+  const T = { value: 0 }, list = [];
+  // o: scale (tamaño del oleaje), amp, deep/crest [día, noche], off (uniform de desplazamiento), shore (x local de la orilla), hole
+  function apply(m, o) {
+    const U = { uWT: T, uWDeep: { value: new THREE.Color() }, uWCrest: { value: new THREE.Color() },
+      uWP: { value: new THREE.Vector4(o.scale || 1, o.amp || 1, o.shore == null ? 1e6 : o.shore, o.foam == null ? 1 : o.foam) }, uWOff: o.off || { value: new THREE.Vector2() } };
+    if (o.hole) U.uHole = holeUniform;
+    m.map = null; m.metalness = 0; m.roughness = o.rough || 0.1; m.envMapIntensity = o.env || 1.15; m.color.set(0xffffff);
+    if (m.emissive) m.emissive.set(0);
+    const prev = m.onBeforeCompile;
+    m.onBeforeCompile = (sh, r) => {
+      prev(sh, r);
+      Object.assign(sh.uniforms, U);
+      sh.vertexShader = 'varying vec2 vWxz; varying float vWz2;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+        '#include <begin_vertex>\n  vWxz = (mat3(modelMatrix) * position).xz; vWz2 = (modelMatrix * vec4(position, 1.0)).z;');
+      sh.fragmentShader = `varying vec2 vWxz; varying float vWz2; uniform float uWT; uniform vec3 uWDeep, uWCrest; uniform vec4 uWP; uniform vec2 uWOff;
+${o.hole ? 'uniform vec4 uHole;' : ''}
+vec3 nsWv(vec2 p, vec2 d, float k, float sp, float a) { float ph = dot(p, d) * k + uWT * sp; return vec3(d * (k * a * cos(ph)), a * sin(ph)); }
+float nsWh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float nsWn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(nsWh(i), nsWh(i + vec2(1.0, 0.0)), f.x), mix(nsWh(i + vec2(0.0, 1.0)), nsWh(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 nsWater = vec3(0.0);
+` + sh.fragmentShader
+        .replace('#include <color_fragment>', `#include <color_fragment>
+  {
+    ${o.hole ? 'if ((vWz2 < uHole.x && vWz2 > uHole.y) || (vWz2 < uHole.z && vWz2 > uHole.w)) discard;' : ''}
+    vec2 P = (vWxz + uWOff) * uWP.x;
+    float wd = length(vViewPosition), fine = clamp(60.0 / wd, 0.0, 1.0);
+    vec3 w = nsWv(P, normalize(vec2(1.0, 0.35)), 0.22, 0.9, 0.42) + nsWv(P, normalize(vec2(-0.6, 1.0)), 0.41, 1.25, 0.2)
+           + (nsWv(P, normalize(vec2(0.3, -1.0)), 1.3, 2.1, 0.06) + nsWv(P, normalize(vec2(-1.0, -0.2)), 2.9, 3.0, 0.025)) * fine;
+    vec2 rp = P * 1.6 + vec2(uWT * 0.5, -uWT * 0.35); float e = 0.35;
+    float n0 = nsWn(rp) + 0.5 * nsWn(rp * 2.3 + 11.0);
+    vec2 rg = vec2(nsWn(rp + vec2(e, 0.0)) + 0.5 * nsWn((rp + vec2(e, 0.0)) * 2.3 + 11.0) - n0, nsWn(rp + vec2(0.0, e)) + 0.5 * nsWn((rp + vec2(0.0, e)) * 2.3 + 11.0) - n0) / e;
+    w.xy += rg * 0.085 * fine;
+    w.xy *= uWP.y;
+    nsWater = w;
+    float crest = smoothstep(0.1, 0.75, w.z);
+    float foam = smoothstep(0.66, 0.95, w.z + (n0 - 0.75) * 0.5) * fine * uWP.w;
+    // orilla: agua más clara y espuma que va y viene
+    float sd = uWP.z - vWxz.x, lap = 3.0 + 2.2 * sin(uWT * 0.9 + vWxz.y * 0.11 + n0 * 2.0);
+    float shore = step(sd, 900.0) * smoothstep(45.0, 0.0, sd);
+    foam += step(sd, 900.0) * (smoothstep(lap + 1.6, lap, sd) * 0.9 + smoothstep(lap * 2.4 + 1.0, lap * 2.4, sd) * 0.35 * n0);
+    diffuseColor.rgb = mix(mix(uWDeep, uWCrest, crest), uWCrest * 1.25, shore * 0.7) + foam * 0.3;
+  }`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  normal = normalize((viewMatrix * vec4(normalize(vec3(-nsWater.x, 1.0, -nsWater.y)), 0.0)).xyz);`);
+    };
+    m.customProgramCacheKey = () => 'water' + (o.hole ? 'h' : '');
+    m.needsUpdate = true;
+    list.push({ U, deep: o.deep.map(c => col(c)), crest: o.crest.map(c => col(c)) });
+    return m;
+  }
+  const tick = () => {
+    T.value = simTime; const n = todState.night;
+    list.forEach(w => { w.U.uWDeep.value.copy(w.deep[0]).lerp(w.deep[1], n); w.U.uWCrest.value.copy(w.crest[0]).lerp(w.crest[1], n); });
+  };
+  return { apply, tick };
+})();
+
+// Río bajo los puentes
+Water.apply(waterMat, { deep: [0x0b3a52, 0x04101f], crest: [0x2f8f9c, 0x12304a] });
+
+// Charcos y tramos inundados (modo RACE): oleaje pequeño y rápido, sin espuma
+{
+  const _om = obsMats; let done = false;
+  obsMats = function () {
+    _om();
+    if (done || !OBSM.water) return; done = true;
+    [OBSM.water, OBSM.flood].forEach(m => { Water.apply(m, { scale: 4, amp: 0.4, foam: 0, rough: 0.06, env: 1.15, deep: [0x16384a, 0x060d18], crest: [0x3f7f95, 0x16304a] }); });
+  };
+}
+
+// Mar de Miami: a la izquierda de la carretera, tras la playa
+const Sea = (() => {
+  const S = { off: { value: new THREE.Vector2() }, SHORE: -40 };
+  const mat = envMat(std({ color: 0xffffff }));
+  Water.apply(mat, { off: S.off, shore: 350, hole: true, deep: [0x06506e, 0x041423], crest: [0x35c4bd, 0x16405a] });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(700, SPAN, 8, 110).rotateX(-Math.PI / 2), mat);
+  mesh.position.set(S.SHORE - 350, 0.05, WRAP_Z - SPAN / 2); mesh.frustumCulled = false; mesh.visible = false; scene.add(mesh);
+  S.mesh = mesh;
+  S.world = id => { mesh.visible = City.seaSide = id === 'miami'; };
+  S.scroll = d => {
+    if (!mesh.visible) return;
+    S.off.value.y = (S.off.value.y - d) % 8192; // el oleaje queda fijo al suelo aunque la malla no se mueva
+    // el lado del mar no tiene edificios
+    BLD.forEach((b, i) => { if (b.x < 0) { setInst(b.mesh, b.mi, b.x, -200, b.z, b.w, b.h, b.d); setInst(roofMesh, i, 0, -50, 0, 0.001, 0.001, 0.001); b.hidden = true; } });
+    BMESH.forEach(m => { m.instanceMatrix.needsUpdate = true; }); roofMesh.instanceMatrix.needsUpdate = true;
+  };
+  return S;
+})();
+{
+  const _sw = scrollWorld;
+  scrollWorld = function (d, t) { _sw(d, t); Sea.scroll(d); };
+  const _aw = applyWorldNow;
+  applyWorldNow = (id, pack) => { _aw(id, pack); Sea.world(id); };
+  const _render = Post.render;
+  Post.render = () => { Water.tick(); _render(); };
+}
+window.__nsPolish.race = race;
 
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
