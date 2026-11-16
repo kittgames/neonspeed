@@ -5279,7 +5279,7 @@ const FAC = TEX.facades.map((f, k) => {
 });
 const BLD = [];
 const boxUnit = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-const BMESH = FAC.map((m, k) => inst(boxUnit, m, k < 2 ? 13 : 9));
+const BMESH = FAC.map((m, k) => inst(boxUnit, m, k < 2 ? 14 : 9));
 const roofMat = basic({ color: 0xffffff });
 const roofMesh = inst(new THREE.BoxGeometry(1, 1, 1), roofMat, 44);
 const NEONS = [[0, 0.94, 1], [1, 0.17, 0.84], [0.6, 0.36, 1], [1, 0.82, 0.25]];
@@ -10528,7 +10528,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '14d605be';
+window.NS_BUILD = '1cd79fbf';
 /* ---------- Boot ---------- */
 $('logo-img').src = TEX.logo;
 applyQuality();
