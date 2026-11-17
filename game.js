@@ -10144,7 +10144,7 @@ function buildPieceCar(pieceIndex) {
   const color = SPY.PIECE_COLORS[pieceIndex];
   const m = buildCar({ color, accent: 0xffffff, style: 'suv' });
   // Icono flotante sobre el coche
-  const iconGeo = new THREE.OctahedronGeometry(0.6, 0);
+  const iconGeo = new THREE.SphereGeometry(0.6, 4, 3);
   const iconMat = basic({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
   const icon = new THREE.Mesh(iconGeo, iconMat);
   icon.position.set(0, 2.8, 0);
@@ -10373,7 +10373,7 @@ function bossAreaAttack() {
     const cx = -SPY.AIR_FIELD_W / 2 + spacing * (i + 0.5);
     const cz = spy.boss.root.position.z + rand(5, 15);
     const r = 3.5;
-    const warn = new THREE.Mesh(new THREE.CircleGeometry(r, 16), _warnMatArea.clone());
+    const warn = new THREE.Mesh(new THREE.PlaneGeometry(r * 2, r * 2), _warnMatArea.clone());
     warn.rotation.x = -Math.PI / 2;
     warn.position.set(cx, SPY.AIR_Y - 0.5, cz);
     scene.add(warn);
@@ -11736,7 +11736,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '15adb1fa';
+window.NS_BUILD = '3cfd3030';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
