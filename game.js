@@ -10287,18 +10287,79 @@ preloadSpyModels();
    MODELOS 3D PROCEDURALES
    ============================================================ */
 
-/* --- Coche enemigo (negro con tiras rojas, agresivo) --- */
+/* --- Coche enemigo (negro con rojo, amenazante y visible) --- */
 function buildEnemyCar() {
-  const m = buildCar({ color: SPY.ENEMY_COLOR, accent: SPY.ENEMY_ACCENT, style: 'sport' });
-  // Añadir luz roja parpadeante en el techo
-  const warn = new THREE.Mesh(
-    new THREE.SphereGeometry(0.3, 8, 6),
-    basic({ color: 0xff2020, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const matBlack = std({ color: 0x0a0a0a, metalness: 0.95, roughness: 0.15 });
+  const matRed = std({ color: 0xcc0000, metalness: 0.8, roughness: 0.2, emissive: 0xff2020, emissiveIntensity: 0.5 });
+  const matGlow = basic({ color: 0xff2020, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  // Chasis musculoso (más ancho y bajo que un coche normal)
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 5.0), matBlack);
+  chassis.position.y = 0.35;
+  body.add(chassis);
+  // Cabina baja y agresiva
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 2.8), matBlack);
+  cabin.position.set(0, 1.05, 0.2);
+  body.add(cabin);
+  // Capó inclinado (cuña frontal)
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 1.8), matBlack);
+  hood.position.set(0, 0.7, -1.8);
+  hood.rotation.x = 0.15;
+  body.add(hood);
+  // Ruedas (4)
+  const wGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.35, 8);
+  const wMat = std({ color: 0x111111, metalness: 0.3, roughness: 0.8 });
+  for (let sx = -1; sx <= 1; sx += 2) {
+    for (let sz = -1; sz <= 1; sz += 2) {
+      const w = new THREE.Mesh(wGeo, wMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(sx * 1.3, 0.5, sz * 1.5);
+      body.add(w);
+    }
+  }
+
+  // === SEÑALES VISUALES ROJAS ===
+  // Franjas laterales rojas brillantes
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 4.6), matRed);
+    stripe.position.set(sx * 1.31, 0.7, -0.2);
+    body.add(stripe);
+  }
+  // Parachoques frontal rojo (barra de embestida)
+  const ram = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.35, 0.3), matRed);
+  ram.position.set(0, 0.5, -2.65);
+  body.add(ram);
+  // Segundo parachoques (defensa)
+  const ram2 = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.2, 0.2), matRed);
+  ram2.position.set(0, 0.3, -2.75);
+  body.add(ram2);
+
+  // Sirena roja en el techo (más grande)
+  const warn = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), matGlow);
+  warn.position.set(0, 1.7, 0.2);
+  root.add(warn);
+
+  // Resplandor rojo debajo del coche (underglow)
+  const underglow = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.5, 6),
+    basic({ color: 0xff1010, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
   );
-  warn.position.set(0, 1.6, 0);
-  m.root.add(warn);
-  m.warn = warn;
-  return m;
+  underglow.rotation.x = -Math.PI / 2;
+  underglow.position.set(0, 0.05, 0);
+  root.add(underglow);
+
+  // Faros delanteros rojos
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const hl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 4), matGlow);
+    hl.position.set(sx * 0.9, 0.65, -2.6);
+    body.add(hl);
+  }
+
+  return { root, body, warn, underglow };
 }
 
 /* --- Coche de pieza (furgoneta blindada con beacon) --- */
@@ -11413,6 +11474,11 @@ function spyUpdateGround(dt) {
       const brightness = e.charging || e.charged ? 1 : 0.7;
       e.model.warn.material.opacity = brightness * (0.5 + Math.sin(simTime * urgency) * 0.5);
       if (!e.charging) e.model.warn.scale.setScalar(1);
+    }
+    // Underglow rojo pulsa
+    if (e.model.underglow) {
+      const ugBright = e.charging ? 0.6 : (e.charged ? 0.5 : 0.25);
+      e.model.underglow.material.opacity = ugBright + Math.sin(simTime * 6) * 0.1;
     }
   }
 
@@ -12967,7 +13033,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '2f416513';
+window.NS_BUILD = 'e760cf60';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
