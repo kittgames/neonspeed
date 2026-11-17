@@ -10131,6 +10131,138 @@ const spy = {
 };
 
 /* ============================================================
+   CARGA DE MODELOS GLB
+   ============================================================ */
+
+/* Mini GLB parser — extrae meshes de un archivo .glb sin GLTFLoader.
+   Soporta accessor→bufferView→buffer con tipos FLOAT, UNSIGNED_SHORT,
+   UNSIGNED_INT, UNSIGNED_BYTE. Devuelve un THREE.Group con todos los meshes. */
+
+const _GLB_MAGIC = 0x46546C67; // 'glTF'
+const _COMP_TYPE = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+const _COMP_SIZE = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+function parseGLB(buffer) {
+  const dv = new DataView(buffer);
+  if (dv.getUint32(0, true) !== _GLB_MAGIC) throw new Error('Not a GLB');
+  // header: magic(4) version(4) length(4)
+  // chunk0: length(4) type(4) data
+  const jsonLen = dv.getUint32(12, true);
+  const jsonStr = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLen));
+  const gltf = JSON.parse(jsonStr);
+  // chunk1 (BIN)
+  const binOffset = 20 + jsonLen;
+  const binLen = dv.getUint32(binOffset, true);
+  const bin = buffer.slice(binOffset + 8, binOffset + 8 + binLen);
+
+  function getAccessorData(accIdx) {
+    const acc = gltf.accessors[accIdx];
+    const bv = gltf.bufferViews[acc.bufferView];
+    const TypedArr = _COMP_TYPE[acc.componentType];
+    const offset = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const count = acc.count * _COMP_SIZE[acc.type];
+    if (bv.byteStride && bv.byteStride !== TypedArr.BYTES_PER_ELEMENT * _COMP_SIZE[acc.type]) {
+      // interleaved — copy deinterleaved
+      const stride = bv.byteStride;
+      const components = _COMP_SIZE[acc.type];
+      const out = new TypedArr(acc.count * components);
+      const src = new DataView(bin, bv.byteOffset || 0);
+      const accOff = acc.byteOffset || 0;
+      for (let i = 0; i < acc.count; i++) {
+        for (let c = 0; c < components; c++) {
+          out[i * components + c] = new TypedArr(bin, (bv.byteOffset || 0) + accOff + i * stride + c * TypedArr.BYTES_PER_ELEMENT, 1)[0];
+        }
+      }
+      return out;
+    }
+    return new TypedArr(bin, offset, count);
+  }
+
+  const group = new THREE.Group();
+  const defaultMat = std({ color: 0x888888, metalness: 0.5, roughness: 0.5 });
+
+  (gltf.meshes || []).forEach(mesh => {
+    mesh.primitives.forEach(prim => {
+      const geo = new THREE.BufferGeometry();
+      // Position
+      if (prim.attributes.POSITION !== undefined) {
+        geo.setAttribute('position', new THREE.BufferAttribute(getAccessorData(prim.attributes.POSITION), 3));
+      }
+      // Normal
+      if (prim.attributes.NORMAL !== undefined) {
+        geo.setAttribute('normal', new THREE.BufferAttribute(getAccessorData(prim.attributes.NORMAL), 3));
+      }
+      // UV
+      if (prim.attributes.TEXCOORD_0 !== undefined) {
+        geo.setAttribute('uv', new THREE.BufferAttribute(getAccessorData(prim.attributes.TEXCOORD_0), 2));
+      }
+      // Color
+      if (prim.attributes.COLOR_0 !== undefined) {
+        const colorAcc = gltf.accessors[prim.attributes.COLOR_0];
+        const colorData = getAccessorData(prim.attributes.COLOR_0);
+        const itemSize = _COMP_SIZE[colorAcc.type];
+        // Normalize if uint8/uint16
+        let normalized = false;
+        if (colorAcc.componentType === 5121 || colorAcc.componentType === 5123) normalized = true;
+        geo.setAttribute('color', new THREE.BufferAttribute(colorData, itemSize, normalized));
+      }
+      // Indices
+      if (prim.indices !== undefined) {
+        geo.setIndex(new THREE.BufferAttribute(getAccessorData(prim.indices), 1));
+      }
+      if (!prim.attributes.NORMAL) geo.computeVertexNormals();
+
+      // Material — intenta extraer color base del glTF
+      let mat = defaultMat;
+      if (prim.material !== undefined && gltf.materials) {
+        const gMat = gltf.materials[prim.material];
+        const pbr = gMat && gMat.pbrMetallicRoughness;
+        if (pbr) {
+          const bc = pbr.baseColorFactor || [0.8, 0.8, 0.8, 1];
+          mat = std({
+            color: new THREE.Color(bc[0], bc[1], bc[2]),
+            metalness: pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.5,
+            roughness: pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.5,
+            transparent: bc[3] < 1,
+            opacity: bc[3],
+          });
+          if (gMat.doubleSided) mat.side = THREE.DoubleSide;
+        }
+      }
+
+      const m = new THREE.Mesh(geo, mat);
+      group.add(m);
+    });
+  });
+
+  // Apply node transforms from scene hierarchy
+  if (gltf.nodes && gltf.scenes) {
+    // Simple: just merge all into one group, applying root transforms
+    const scene0 = gltf.scenes[gltf.scene || 0];
+    if (scene0 && scene0.nodes) {
+      // For now we already added all meshes flat — apply scene scale if needed
+    }
+  }
+
+  return group;
+}
+
+/* --- Precarga de modelos GLB --- */
+let _glbPlane = null, _glbBoss = null, _glbLoading = null;
+
+function preloadSpyModels() {
+  if (_glbLoading) return _glbLoading;
+  _glbLoading = Promise.all([
+    fetch('plane.glb').then(r => r.arrayBuffer()).then(buf => { _glbPlane = parseGLB(buf); }).catch(e => { console.warn('plane.glb load failed, using procedural:', e); }),
+    fetch('boss.glb').then(r => r.arrayBuffer()).then(buf => { _glbBoss = parseGLB(buf); }).catch(e => { console.warn('boss.glb load failed, using procedural:', e); }),
+  ]);
+  return _glbLoading;
+}
+
+// Iniciar precarga inmediatamente
+preloadSpyModels();
+
+/* ============================================================
    MODELOS 3D PROCEDURALES
    ============================================================ */
 
@@ -10168,6 +10300,49 @@ function buildPlane() {
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
+
+  if (_glbPlane) {
+    /* === Usar modelo GLB === */
+    const model = _glbPlane.clone();
+    // Escalar y orientar el modelo para que encaje con el gameplay
+    model.scale.set(2.5, 2.5, 2.5);
+    model.rotation.y = Math.PI; // apuntar hacia -Z (dirección de vuelo)
+    body.add(model);
+
+    // Crear grupos de thruster sintéticos para las llamas
+    const glowMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+    const flameGeo = new THREE.ConeGeometry(0.25, 1.4, 6);
+    flameGeo.rotateX(Math.PI / 2);
+
+    const thrL = new THREE.Group();
+    const flameL = new THREE.Mesh(flameGeo, glowMat);
+    flameL.position.z = -0.8;
+    thrL.add(flameL);
+    thrL.position.set(-0.5, -0.08, -2.9);
+    body.add(thrL);
+
+    const thrR = new THREE.Group();
+    const flameR = new THREE.Mesh(flameGeo.clone(), glowMat);
+    flameR.position.z = -0.8;
+    thrR.add(flameR);
+    thrR.position.set(0.5, -0.08, -2.9);
+    body.add(thrR);
+
+    // Halo sutil debajo
+    const glowH = basic({ color: 0x00f0ff, transparent: true, opacity: 0.15,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), glowH);
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.set(0, -0.5, -0.2);
+    body.add(halo);
+
+    root.visible = false;
+    scene.add(root);
+    return { root, body, thrL, thrR };
+  }
+
+  /* === Fallback procedural === */
 
   /* --- Materiales --- */
   const mat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
@@ -10327,6 +10502,73 @@ function buildPlane() {
 /* --- Nave nodriza steampunk (Dreadnought) --- */
 function buildBoss() {
   const root = new THREE.Group();
+
+  if (_glbBoss) {
+    /* === Usar modelo GLB === */
+    const model = _glbBoss.clone();
+    // Escalar el dreadnought para que sea imponente
+    model.scale.set(4, 4, 4);
+    model.rotation.y = Math.PI; // proa hacia +Z
+    root.add(model);
+
+    // hullMesh — referencia al primer mesh grande del modelo
+    let hullMesh = model.children[0] || model;
+
+    // Torretas sintéticas — necesarias para la lógica de combate
+    const dark = std({ color: 0x1a1210, metalness: 0.4, roughness: 0.7 });
+    const copper = std({ color: 0xb87333, metalness: 0.85, roughness: 0.25 });
+    const iron = std({ color: 0x555555, metalness: 0.7, roughness: 0.4 });
+    const orangeGlow = basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    const turrets = [];
+    for (let s = -1; s <= 1; s += 2) {
+      const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.5, 1.2, 10), dark);
+      tBase.position.set(s * 6.5, -1.5, 1);
+      root.add(tBase);
+      const shield = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 1.8), iron);
+      shield.position.set(s * 6.5, -1, 1.8);
+      root.add(shield);
+      const barrelGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.5, 6);
+      barrelGeo.rotateX(Math.PI / 2);
+      const barrel1 = new THREE.Mesh(barrelGeo, copper);
+      barrel1.position.set(s * 6.5 + s * 0.4, -1, 3.3);
+      root.add(barrel1);
+      const barrel2 = new THREE.Mesh(barrelGeo.clone(), copper);
+      barrel2.position.set(s * 6.5 - s * 0.4, -1, 3.3);
+      root.add(barrel2);
+      const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), orangeGlow);
+      muzzle.position.set(s * 6.5, -1, 5.0);
+      root.add(muzzle);
+      const barrel = new THREE.Group();
+      barrel.add(barrel1); barrel.add(barrel2); barrel.add(muzzle); barrel.add(shield);
+      root.add(barrel);
+      turrets.push({ base: tBase, barrel, side: s, alive: true });
+    }
+
+    // Núcleo de energía
+    const coreGlow = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(2.0, 14, 10), coreGlow);
+    core.position.set(0, -2.8, 0);
+    root.add(core);
+
+    // Armor plate
+    const hull_m = std({ color: 0x3a2a1a, metalness: 0.65, roughness: 0.45 });
+    const armorGeo = new THREE.BoxGeometry(7, 1.5, 5.5, 2, 1, 2);
+    const ap = armorGeo.attributes.position;
+    for (let i = 0; i < ap.count; i++) {
+      const y = ap.getY(i);
+      ap.setY(i, y - 0.3 * Math.abs(ap.getX(i)) / 3.5);
+    }
+    armorGeo.computeVertexNormals();
+    const armor = new THREE.Mesh(armorGeo, hull_m);
+    armor.position.set(0, -2.2, 0);
+    root.add(armor);
+
+    root.visible = false;
+    scene.add(root);
+    return { root, turrets, core, armor, hullMesh };
+  }
+
+  /* === Fallback procedural === */
 
   /* --- Materiales --- */
   const hull    = std({ color: 0x3a2a1a, metalness: 0.65, roughness: 0.45 });
@@ -11982,7 +12224,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = 'a949e653';
+window.NS_BUILD = 'ea48afbb';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
