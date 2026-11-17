@@ -10041,9 +10041,14 @@ const SPY = {
   REGEN_RATE:   6,    // hp/s
 
   /* enemigos de embestida */
-  ENEMY_INTERVAL: 6,  // s base
-  ENEMY_SPEED_MIN: 38,
-  ENEMY_SPEED_MAX: 52,
+  ENEMY_INTERVAL: 5,  // s base (era 6)
+  ENEMY_SPEED_MIN: 42,
+  ENEMY_SPEED_MAX: 58,
+  ENEMY_STEER: 14,    // velocidad lateral de persecución (era 8 hardcoded)
+  ENEMY_CHARGE_DIST: 25,  // distancia Z para activar carga
+  ENEMY_CHARGE_SPEED: 80, // velocidad durante carga
+  ENEMY_CHARGE_STEER: 22, // steering lateral durante carga
+  ENEMY_WARN_TIME: 0.8,   // s de aviso antes de cargar
   ENEMY_COLOR: 0x1a1a1a,
   ENEMY_ACCENT: 0xff2020,
 
@@ -11051,7 +11056,8 @@ function spyUpdateGround(dt) {
     const e = {
       model, lane, x: LANES[lane], z: SPAWN_Z,
       speed: rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX),
-      hp: 3, charging: false, chargeT: 0
+      hp: 3, charging: false, charged: false, chargeT: 0,
+      chargeVelZ: 0, chargeTargetX: 0
     };
     model.root.position.set(e.x, 0, e.z);
     spy.enemies.push(e);
@@ -11077,15 +11083,85 @@ function spyUpdateGround(dt) {
   for (let i = spy.enemies.length - 1; i >= 0; i--) {
     const e = spy.enemies[i];
 
-    // Mover hacia el jugador (embestida)
-    const dz = player.speed - e.speed;
-    e.z += dz * dt;
+    // === IA de embestida en 3 fases ===
+    const distToPlayer = e.z; // e.z es relativo al jugador (0 = misma Z)
 
-    // Persecución lateral
-    const targetX = player.x;
-    const dx = targetX - e.x;
-    if (Math.abs(dx) > 0.5) {
-      e.x += Math.sign(dx) * 8 * dt;
+    if (!e.charging && !e.charged) {
+      // FASE 1: Aproximación — se acerca por detrás alineándose
+      const dz = player.speed - e.speed;
+      e.z += dz * dt;
+
+      // Persecución lateral (velocidad normal)
+      const dx = player.x - e.x;
+      if (Math.abs(dx) > 0.3) {
+        e.x += Math.sign(dx) * SPY.ENEMY_STEER * dt;
+      }
+
+      // Activar carga cuando está cerca y alineado
+      if (distToPlayer > -SPY.ENEMY_CHARGE_DIST && distToPlayer < -4 && Math.abs(player.x - e.x) < 3) {
+        e.charging = true;
+        e.chargeT = 0;
+        e.chargeTargetX = player.x; // fija el objetivo
+      }
+    } else if (e.charging && e.chargeT < SPY.ENEMY_WARN_TIME) {
+      // FASE 2: Aviso — frena brevemente, destello rojo intenso, sacudida
+      e.chargeT += dt;
+      // Frena para crear tensión
+      e.z += (player.speed - e.speed * 0.4) * dt;
+      // Zigzag amenazante
+      e.x += Math.sin(e.chargeT * 20) * 15 * dt;
+      // Flash rojo rápido en la luz
+      if (e.model.warn) {
+        e.model.warn.material.opacity = 1;
+        e.model.warn.scale.setScalar(1 + Math.sin(e.chargeT * 30) * 0.5);
+        e.model.warn.material.color.setHex(0xff0000);
+      }
+      // Chispas de los neumáticos durante el frenado
+      if (Math.random() < 0.6) {
+        burst(e.x + rand(-0.8, 0.8), 0.1, e.z, 2, {
+          colors: [[1, 0.6, 0.2], [1, 0.9, 0.4]], speed: 4, up: 2, life: 0.2, size: 0.15, spread: 0.4, grav: 15
+        });
+      }
+    } else if (e.charging) {
+      // FASE 3: ¡CARGA! — aceleración brutal hacia el jugador
+      e.charged = true;
+      e.charging = false;
+      e.chargeVelZ = SPY.ENEMY_CHARGE_SPEED; // velocidad extra de embestida
+      e.chargeTargetX = player.x; // actualiza target al momento de cargar
+    }
+
+    if (e.charged) {
+      // Embestida activa — velocidad mucho mayor + persecución agresiva
+      e.z += (player.speed + e.chargeVelZ - e.speed) * dt;
+      // Steering agresivo hacia el jugador
+      const dx = e.chargeTargetX - e.x;
+      e.x += Math.sign(dx) * SPY.ENEMY_CHARGE_STEER * dt;
+      // Decelerar gradualmente el impulso extra
+      e.chargeVelZ *= Math.exp(-0.8 * dt);
+      // Estela de fuego del escape
+      if (Math.random() < 0.7) {
+        burst(e.x, 0.5, e.z + 2, 3, {
+          colors: [[1, 0.3, 0], [1, 0.6, 0.1], [1, 0.9, 0.3]], speed: 5, up: 2, life: 0.3, size: 0.35, spread: 0.3, grav: 3, vz: 6
+        });
+      }
+      // Si pasa de largo sin golpear, desactiva carga
+      if (e.z > 8) {
+        e.charged = false;
+        e.chargeVelZ = 0;
+        e.speed = rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX); // vuelve a velocidad normal
+      }
+    }
+
+    // Inclinar el modelo según movimiento (bank visual)
+    const lateralVel = (player.x - e.x);
+    e.model.body.rotation.z = clamp(lateralVel * 0.05, -0.15, 0.15);
+    // Pitch del coche durante la carga (morro abajo = agresividad)
+    if (e.charged) {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, -0.08, 5 * dt);
+    } else if (e.charging && e.chargeT < SPY.ENEMY_WARN_TIME) {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, 0.06, 5 * dt); // levanta morro al frenar
+    } else {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, 0, 3 * dt);
     }
 
     e.model.root.position.set(e.x, 0, e.z);
@@ -11099,14 +11175,32 @@ function spyUpdateGround(dt) {
 
     // Colisión con jugador
     if (Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
-      spyDamage(SPY.DMG_ENEMY);
-      // Knockback al enemigo
-      e.z = -15;
-      e.speed = player.speed * 0.6;
-      flash('#ff3b5c');
-      shake = 0.6;
+      const wasCharging = e.charged;
+      const dmg = wasCharging ? Math.round(SPY.DMG_ENEMY * 1.5) : SPY.DMG_ENEMY;
+      spyDamage(dmg);
+      // Knockback al enemigo — más si estaba cargando
+      e.z = wasCharging ? -20 : -12;
+      e.speed = player.speed * 0.5;
+      e.charged = false;
+      e.charging = false;
+      e.chargeVelZ = 0;
+      flash(wasCharging ? '#ff0000' : '#ff3b5c');
+      shake = wasCharging ? 1.2 : 0.6;
       AudioSys.sfx('crash');
-      burst(player.x, 1, -1, 20, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2]], speed: 10, up: 6, life: 0.6, size: 0.4, spread: 0.5, grav: 10 });
+      // Más partículas si fue carga
+      const pn = wasCharging ? 35 : 20;
+      burst(player.x, 1, -1, pn, {
+        colors: [[1, 0.3, 0.1], [1, 0.6, 0.2], [1, 1, 0.5]],
+        speed: wasCharging ? 16 : 10, up: wasCharging ? 10 : 6,
+        life: wasCharging ? 0.8 : 0.6, size: wasCharging ? 0.6 : 0.4,
+        spread: 0.5, grav: 10
+      });
+      if (wasCharging) {
+        // Impacto extra: empujón lateral al jugador
+        player.x += Math.sign(e.x - player.x) * rand(1.5, 3);
+        player.x = clamp(player.x, LANES[0] - 1, LANES[3] + 1);
+        toast('💥 RAM ATTACK!', '-' + dmg + ' HP', '#ff0000');
+      }
     }
 
     // Hit por balas
@@ -11117,11 +11211,17 @@ function spyUpdateGround(dt) {
         scene.remove(b.mesh);
         spy.bullets.splice(j, 1);
         burst(e.x, 1, e.z, 8, { colors: [[1, 0.8, 0.3]], speed: 6, up: 4, life: 0.3, size: 0.3, spread: 0.3, grav: 8 });
+        // Las balas interrumpen la carga
+        if (e.charging || e.charged) {
+          e.charging = false;
+          e.charged = false;
+          e.chargeVelZ = 0;
+        }
         if (e.hp <= 0) {
           scene.remove(e.model.root);
           spy.enemies.splice(i, 1);
-          spy.score += 100;
-          addScore(100);
+          spy.score += e.charged ? 150 : 100;
+          addScore(e.charged ? 150 : 100);
           burst(e.x, 1, e.z, 30, { colors: [[1, 0.5, 0.1], [1, 0.8, 0.3], [1, 1, 0.7]], speed: 14, up: 8, life: 0.8, size: 0.5, spread: 0.5, grav: 12 });
           AudioSys.sfx('powerup');
           break;
@@ -11129,9 +11229,12 @@ function spyUpdateGround(dt) {
       }
     }
 
-    // Parpadeo de luz roja del enemigo
+    // Parpadeo de luz roja del enemigo (más rápido si cerca)
     if (e.model.warn) {
-      e.model.warn.material.opacity = 0.5 + Math.sin(simTime * 12) * 0.4;
+      const urgency = e.charging ? 24 : (e.charged ? 18 : 8);
+      const brightness = e.charging || e.charged ? 1 : 0.7;
+      e.model.warn.material.opacity = brightness * (0.5 + Math.sin(simTime * urgency) * 0.5);
+      if (!e.charging) e.model.warn.scale.setScalar(1);
     }
   }
 
@@ -12479,7 +12582,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '635844a4';
+window.NS_BUILD = 'd1f1bff2';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
