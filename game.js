@@ -6819,7 +6819,7 @@ function updateGlows(t) {
   }
   coins.forEach(c => { if (c.z > -220) glow.add(c.x, c.y, c.z, 2.4, 1, 0.75, 0.2, 0.18 + 0.5 * n); });
   powerups.forEach(p => { const c = PU_TYPES[p.type].rgb; glow.add(p.x, p.mesh.position.y, p.z, 5, c[0], c[1], c[2], 0.9); });
-  policeFx(t); heliFx(t); heatFx(t); forkFx(t); raceFx(); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
+  policeFx(t); heliFx(t); heatFx(t); forkFx(t); raceFx(); spyFx(simTime); playerFx(t); bladeMat.color.setScalar(0.45 + 2.0 * todState.night);
   if (ghostModel.root.visible) glow.add(ghostModel.root.position.x, 0.8, ghostModel.root.position.z, 4, 0, 0.9, 1, 0.35);
 }
 function updateGhost() {
@@ -7528,7 +7528,7 @@ function update(realDt) {
   Music.update(realDt, Weather.rain);
   Refl.begin();
   updateTraffic(dt, ws);
-  updatePolice(dt); updateHeli(dt); updateHeat(dt, ws); updateFork(dt); updateRace(dt);
+  updatePolice(dt); updateHeli(dt); updateHeat(dt, ws); updateFork(dt); updateRace(dt); spyUpdate(dt);
   updatePickups(dt, ws, simTime);
   updatePlayerVisual(dt, ws);
   updateGhost();
@@ -10014,6 +10014,1206 @@ function ghostsFinish(win) {
 Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.ghostWorld = save.world || 'neon'; race.ghostSrc = list; } });
 
 /* =====================================================================
+   SPY HUNTER MODE — Prototipo
+   Fase de suelo: recoge 4 piezas para transformarte en avión.
+   Fase aérea: shooter vertical contra la nave nodriza steampunk.
+   Sin ghost, sin amigos.  Badge al vencer al jefe 1.
+   ===================================================================== */
+
+/* ---------- constantes ---------- */
+const SPY = {
+  /* energía */
+  HP_MAX: 100,
+  DMG_ENEMY:    25,   // embestida de enemigo
+  DMG_TRAFFIC:  15,   // choque con tráfico inocente
+  DMG_KILL:     30,   // eliminar inocente
+  HEAL_PIECE:   20,   // recoger pieza
+  REGEN_DELAY:  4,    // s sin daño para regenerar
+  REGEN_RATE:   6,    // hp/s
+
+  /* enemigos de embestida */
+  ENEMY_INTERVAL: 6,  // s base
+  ENEMY_SPEED_MIN: 38,
+  ENEMY_SPEED_MAX: 52,
+  ENEMY_COLOR: 0x1a1a1a,
+  ENEMY_ACCENT: 0xff2020,
+
+  /* tráfico inocente */
+  CIV_INTERVAL: 4,    // s base
+
+  /* piezas */
+  PIECE_NAMES: ['MACHINE GUN', 'BOMBS', 'MISSILES', 'WINGS'],
+  PIECE_COLORS: [0xffd23f, 0xff6b2b, 0xff2bd6, 0x00f0ff],
+  PIECE_DIST: [300, 700, 1200, 1800],  // distancia mínima para cada pieza
+
+  /* armas de suelo */
+  GUN_RATE: 0.12,     // s entre disparos
+  GUN_SPEED: 180,     // m/s
+  GUN_DMG: 1,
+  BOMB_RATE: 0.5,
+  BOMB_SPEED: 100,
+  BOMB_DMG: 3,
+  BOMB_RADIUS: 4,
+
+  /* fase aérea */
+  AIR_SPEED: 42,      // velocidad lateral del avión
+  AIR_Y: 35,          // altura del avión
+  AIR_FIELD_W: 20,    // ancho del campo de juego aéreo
+  AIR_FIELD_H: 50,    // profundidad del campo
+  MISSILE_RATE: 0.75, // s entre salvas (2 misiles por salva)
+  MISSILE_SPEED: 60,
+  MISSILE_DMG: 10,
+
+  /* jefe 1 */
+  BOSS_Y: 42,
+  BOSS_Z: -40,
+  TURRET_HP: 80,
+  CORE_HP: 240,
+  BEAM_WARN: 1.5,     // s de aviso antes de disparar
+  BEAM_DUR: 0.4,      // s que dura el rayo
+  AREA_WARN: 1.5,
+  AREA_DUR: 0.5,
+  ATTACK_CD: 3.5,     // s entre ataques
+};
+
+/* ---------- estado ---------- */
+const spy = {
+  mode: false,          // modo activo
+  phase: 'off',         // off | ground | transform | air | boss | win | dead
+  hp: SPY.HP_MAX,
+  lastDmg: 0,          // tiempo desde último daño
+  pieces: 0,           // 0-4 piezas recogidas
+  weapon: 0,           // 0=nada, 1=gun, 2=+bombs, 3=+missiles
+  score: 0,
+
+  /* suelo */
+  enemies: [],          // coches enemigos activos
+  pieceCars: [],        // coches de pieza activos
+  nextEnemy: 3,         // s hasta el siguiente enemigo
+  nextCiv: 2,
+  nextPiece: 0,         // índice de la siguiente pieza (0-3)
+  bullets: [],          // proyectiles del jugador
+  bombProjs: [],
+  gunCd: 0,
+  bombCd: 0,
+
+  /* aire */
+  plane: null,          // THREE.Group del avión
+  planeX: 0,
+  planeZ: 0,
+  missiles: [],         // misiles del jugador en aire
+  missileCd: 0,
+
+  /* jefe */
+  boss: null,           // THREE.Group
+  bossPhase: 1,         // 1 = torretas, 2 = núcleo expuesto
+  turretHP: [SPY.TURRET_HP, SPY.TURRET_HP],
+  coreHP: SPY.CORE_HP,
+  attacks: [],          // ataques activos del jefe
+  attackCd: 2,
+  bossT: 0,            // tiempo total del combate
+
+  /* transformación */
+  transformT: 0,
+
+  /* visual */
+  hudEl: null,
+  piecesEl: null,
+};
+
+/* ============================================================
+   MODELOS 3D PROCEDURALES
+   ============================================================ */
+
+/* --- Coche enemigo (negro con tiras rojas, agresivo) --- */
+function buildEnemyCar() {
+  const m = buildCar({ color: SPY.ENEMY_COLOR, accent: SPY.ENEMY_ACCENT, style: 'sport' });
+  // Añadir luz roja parpadeante en el techo
+  const warn = new THREE.Mesh(
+    new THREE.SphereGeometry(0.3, 8, 6),
+    basic({ color: 0xff2020, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  warn.position.set(0, 1.6, 0);
+  m.root.add(warn);
+  m.warn = warn;
+  return m;
+}
+
+/* --- Coche de pieza (brillante, color según pieza) --- */
+function buildPieceCar(pieceIndex) {
+  const color = SPY.PIECE_COLORS[pieceIndex];
+  const m = buildCar({ color, accent: 0xffffff, style: 'suv' });
+  // Icono flotante sobre el coche
+  const iconGeo = new THREE.OctahedronGeometry(0.6, 0);
+  const iconMat = basic({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  const icon = new THREE.Mesh(iconGeo, iconMat);
+  icon.position.set(0, 2.8, 0);
+  m.root.add(icon);
+  m.icon = icon;
+  m.pieceIndex = pieceIndex;
+  return m;
+}
+
+/* --- Avión del jugador (transformación del coche) --- */
+function buildPlane() {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const mat = std({ color: 0x1a2a4a, metalness: 0.7, roughness: 0.3 });
+  const glow = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+  const red = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  // Fuselaje
+  const fuse = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 5), mat);
+  body.add(fuse);
+
+  // Cabina
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.8), std({ color: 0x0d1626, metalness: 0.9, roughness: 0.08, transparent: true, opacity: 0.8 }));
+  cab.position.set(0, 0.4, 0.5);
+  body.add(cab);
+
+  // Alas
+  const wingGeo = new THREE.BoxGeometry(8, 0.12, 2.2);
+  const wingL = new THREE.Mesh(wingGeo, mat);
+  wingL.position.set(0, 0, -0.3);
+  body.add(wingL);
+
+  // Alerones punta de ala
+  const tipGeo = new THREE.BoxGeometry(0.3, 0.8, 0.8);
+  const tipL = new THREE.Mesh(tipGeo, mat);
+  tipL.position.set(-4, 0.3, -0.3);
+  body.add(tipL);
+  const tipR = new THREE.Mesh(tipGeo, mat);
+  tipR.position.set(4, 0.3, -0.3);
+  body.add(tipR);
+
+  // Estabilizador trasero
+  const tailGeo = new THREE.BoxGeometry(3, 0.1, 1);
+  const tail = new THREE.Mesh(tailGeo, mat);
+  tail.position.set(0, 0, -2.2);
+  body.add(tail);
+  const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 1.2), mat);
+  vTail.position.set(0, 0.5, -2.2);
+  body.add(vTail);
+
+  // Propulsores neón
+  const thrustGeo = new THREE.CylinderGeometry(0.25, 0.4, 0.8, 8);
+  thrustGeo.rotateX(Math.PI / 2);
+  const thrL = new THREE.Mesh(thrustGeo, glow);
+  thrL.position.set(-0.5, -0.1, -2.6);
+  body.add(thrL);
+  const thrR = new THREE.Mesh(thrustGeo, glow);
+  thrR.position.set(0.5, -0.1, -2.6);
+  body.add(thrR);
+
+  // Lanzamisiles (bajo alas)
+  const misGeo = new THREE.CylinderGeometry(0.12, 0.12, 1.2, 6);
+  misGeo.rotateX(Math.PI / 2);
+  const misL = new THREE.Mesh(misGeo, red);
+  misL.position.set(-2.5, -0.2, 0);
+  body.add(misL);
+  const misR = new THREE.Mesh(misGeo, red);
+  misR.position.set(2.5, -0.2, 0);
+  body.add(misR);
+
+  root.visible = false;
+  scene.add(root);
+  return { root, body, thrL, thrR };
+}
+
+/* --- Nave nodriza steampunk --- */
+function buildBoss() {
+  const root = new THREE.Group();
+
+  const hull = std({ color: 0x3a2a1a, metalness: 0.6, roughness: 0.5 });
+  const copper = std({ color: 0xb87333, metalness: 0.8, roughness: 0.3 });
+  const dark = std({ color: 0x1a1210, metalness: 0.4, roughness: 0.7 });
+  const coreGlow = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
+  const shieldMat = basic({ color: 0x44aaff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  // Casco principal — forma de dirigible achatado
+  const hullGeo = new THREE.BoxGeometry(16, 3, 8, 2, 1, 2);
+  // Redondear ligeramente los vértices
+  const pos = hullGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const fx = 1 - Math.pow(Math.abs(x) / 8, 3) * 0.3;
+    pos.setY(i, y * fx);
+  }
+  hullGeo.computeVertexNormals();
+  const hullMesh = new THREE.Mesh(hullGeo, hull);
+  root.add(hullMesh);
+
+  // Superestructura (puente de mando arriba)
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 3), dark);
+  bridge.position.set(0, 2, 0);
+  root.add(bridge);
+
+  // Chimeneas steampunk
+  for (let i = -1; i <= 1; i += 2) {
+    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3, 8), copper);
+    chimney.position.set(i * 3, 3.5, -1);
+    root.add(chimney);
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.5, 0.4, 8), copper);
+    rim.position.set(i * 3, 5, -1);
+    root.add(rim);
+  }
+
+  // Engranajes decorativos (laterales)
+  for (let i = -1; i <= 1; i += 2) {
+    const gear = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.2, 6, 12), copper);
+    gear.position.set(i * 8.2, 0, 0);
+    gear.rotation.y = Math.PI / 2;
+    root.add(gear);
+  }
+
+  // Torretas laterales
+  const turrets = [];
+  for (let i = -1; i <= 1; i += 2) {
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.2, 1.5, 8), dark);
+    tBase.position.set(i * 6, -1.5, 0);
+    root.add(tBase);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3, 6), copper);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(i * 6, -1.5, 2.5);
+    root.add(barrel);
+    turrets.push({ base: tBase, barrel, side: i, alive: true });
+  }
+
+  // Núcleo central (debajo del casco)
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.8, 12, 8), coreGlow);
+  core.position.set(0, -2.5, 0);
+  root.add(core);
+
+  // Coraza que protege el núcleo (fase 1)
+  const armor = new THREE.Mesh(new THREE.BoxGeometry(6, 1.2, 5), hull);
+  armor.position.set(0, -2, 0);
+  root.add(armor);
+
+  // Propulsores inferiores
+  for (let i = -1; i <= 1; i += 2) {
+    const prop = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 1, 8), copper);
+    prop.position.set(i * 5, -2.5, -2);
+    root.add(prop);
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2, 8), basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    flame.position.set(i * 5, -4, -2);
+    flame.rotation.x = Math.PI;
+    root.add(flame);
+  }
+
+  root.visible = false;
+  scene.add(root);
+
+  return { root, turrets, core, armor, hullMesh };
+}
+
+/* ============================================================
+   PROYECTILES
+   ============================================================ */
+const _bulletGeo = new THREE.SphereGeometry(0.15, 4, 4);
+const _bulletMat = basic({ color: 0xffd23f, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+const _bombGeo = new THREE.SphereGeometry(0.3, 6, 6);
+const _bombMat = basic({ color: 0xff6b2b, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+const _missileGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6);
+_missileGeo.rotateX(Math.PI / 2);
+const _missileMat = basic({ color: 0xff2bd6, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+
+function spawnBullet(x, z) {
+  const mesh = new THREE.Mesh(_bulletGeo, _bulletMat);
+  mesh.position.set(x, 0.8, z);
+  scene.add(mesh);
+  return { mesh, x, z, speed: SPY.GUN_SPEED, dmg: SPY.GUN_DMG };
+}
+
+function spawnBomb(x, z) {
+  const mesh = new THREE.Mesh(_bombGeo, _bombMat);
+  mesh.position.set(x, 0.6, z);
+  scene.add(mesh);
+  return { mesh, x, z, speed: SPY.BOMB_SPEED, dmg: SPY.BOMB_DMG, radius: SPY.BOMB_RADIUS };
+}
+
+function spawnMissile(x, z, targetX, targetZ) {
+  const mesh = new THREE.Mesh(_missileGeo, _missileMat);
+  mesh.position.set(x, SPY.AIR_Y, z);
+  scene.add(mesh);
+  const dx = targetX - x, dz = targetZ - z;
+  const len = Math.sqrt(dx * dx + dz * dz) || 1;
+  return { mesh, x, y: SPY.AIR_Y, z, vx: dx / len * SPY.MISSILE_SPEED, vz: dz / len * SPY.MISSILE_SPEED, dmg: SPY.MISSILE_DMG };
+}
+
+/* ============================================================
+   ATAQUES DEL JEFE
+   ============================================================ */
+
+// Indicadores de ataque (marcadores en el suelo/aire)
+const _warnGeo = new THREE.PlaneGeometry(1, 1);
+_warnGeo.rotateX(-Math.PI / 2);
+const _warnMatBeam = basic({ color: 0xff4444, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+const _warnMatArea = basic({ color: 0xffaa22, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+
+function bossBeamAttack() {
+  // Rayo que barre una franja horizontal
+  const zTarget = spy.planeZ + rand(-5, 5);
+  const warn = new THREE.Mesh(new THREE.PlaneGeometry(SPY.AIR_FIELD_W * 2, 3), _warnMatBeam.clone());
+  warn.rotation.x = -Math.PI / 2;
+  warn.position.set(0, SPY.AIR_Y - 0.5, zTarget);
+  scene.add(warn);
+  return { type: 'beam', z: zTarget, warn, t: 0, warned: false, fired: false, done: false,
+    warnDur: SPY.BEAM_WARN, fireDur: SPY.BEAM_DUR, halfH: 2.5 };
+}
+
+function bossAreaAttack() {
+  // Bombardeo circular — 3 zonas, siempre deja un hueco
+  const zones = [];
+  const cols = 3, spacing = SPY.AIR_FIELD_W / cols;
+  const safe = Math.floor(Math.random() * cols);
+  for (let i = 0; i < cols; i++) {
+    if (i === safe) continue;
+    const cx = -SPY.AIR_FIELD_W / 2 + spacing * (i + 0.5);
+    const cz = spy.boss.root.position.z + rand(5, 15);
+    const r = 3.5;
+    const warn = new THREE.Mesh(new THREE.CircleGeometry(r, 16), _warnMatArea.clone());
+    warn.rotation.x = -Math.PI / 2;
+    warn.position.set(cx, SPY.AIR_Y - 0.5, cz);
+    scene.add(warn);
+    zones.push({ x: cx, z: cz, r, warn });
+  }
+  return { type: 'area', zones, t: 0, warned: false, fired: false, done: false,
+    warnDur: SPY.AREA_WARN, fireDur: SPY.AREA_DUR };
+}
+
+/* ============================================================
+   INICIO / FIN DEL MODO
+   ============================================================ */
+
+function spyReset() {
+  spy.phase = 'off';
+  spy.hp = SPY.HP_MAX;
+  spy.lastDmg = 0;
+  spy.pieces = 0;
+  spy.weapon = 0;
+  spy.score = 0;
+  spy.nextEnemy = 3;
+  spy.nextCiv = 2;
+  spy.nextPiece = 0;
+  spy.gunCd = 0;
+  spy.bombCd = 0;
+  spy.transformT = 0;
+  spy.bossPhase = 1;
+  spy.turretHP = [SPY.TURRET_HP, SPY.TURRET_HP];
+  spy.coreHP = SPY.CORE_HP;
+  spy.attacks = [];
+  spy.attackCd = 2;
+  spy.bossT = 0;
+  spy.missileCd = 0;
+  spy.planeX = 0;
+  spy.planeZ = 0;
+
+  // Limpiar entidades
+  spy.enemies.forEach(e => { if (e.model) scene.remove(e.model.root); });
+  spy.enemies = [];
+  spy.pieceCars.forEach(p => { if (p.model) scene.remove(p.model.root); });
+  spy.pieceCars = [];
+  spy.bullets.forEach(b => scene.remove(b.mesh));
+  spy.bullets = [];
+  spy.bombProjs.forEach(b => scene.remove(b.mesh));
+  spy.bombProjs = [];
+  spy.missiles.forEach(m => scene.remove(m.mesh));
+  spy.missiles = [];
+  spy.attacks.forEach(a => {
+    if (a.warn) scene.remove(a.warn);
+    if (a.zones) a.zones.forEach(z => scene.remove(z.warn));
+  });
+
+  if (spy.plane) { spy.plane.root.visible = false; }
+  if (spy.boss) { spy.boss.root.visible = false; }
+}
+
+function spyStart() {
+  spy.mode = true;
+  spyReset();
+  spy.phase = 'ground';
+
+  // Construir modelos que necesitemos (lazy)
+  if (!spy.plane) spy.plane = buildPlane();
+  if (!spy.boss) spy.boss = buildBoss();
+
+  // HUD
+  spyShowHUD(true);
+  spyUpdateHUD();
+}
+
+function spyEnd(won) {
+  spy.phase = won ? 'win' : 'dead';
+  if (won) {
+    // Badge: SPY HUNTER
+    if (typeof checkBadges === 'function') {
+      if (!save.badges) save.badges = {};
+      if (!save.badges.spyhunter) {
+        save.badges.spyhunter = Date.now();
+        save.coins += 2000;
+        run.newBadges = run.newBadges || [];
+        run.newBadges.push('spyhunter');
+        persist();
+      }
+    }
+    spy.score += 5000; // bonus victoria
+    toast('BOSS DESTROYED!', '+5000 bonus', '#ffd23f');
+    AudioSys.sfx('powerup');
+  }
+  setTimeout(() => {
+    // Usar el sistema de game over normal
+    run.score = spy.score;
+    endRun();
+  }, won ? 2500 : 1500);
+}
+
+/* ============================================================
+   HUD
+   ============================================================ */
+
+function spyShowHUD(show) {
+  let hud = document.getElementById('spyhud');
+  if (!hud && show) {
+    hud = document.createElement('div');
+    hud.id = 'spyhud';
+    hud.innerHTML = `
+      <div class="spy-energy">
+        <div class="spy-ebar"><i id="spy-efill"></i></div>
+        <b id="spy-ehp">100</b>
+      </div>
+      <div class="spy-pieces" id="spy-pieces">
+        <span class="sp" id="sp0">🔫</span>
+        <span class="sp" id="sp1">💣</span>
+        <span class="sp" id="sp2">🚀</span>
+        <span class="sp" id="sp3">✈️</span>
+      </div>
+      <div class="spy-weapon" id="spy-weapon"></div>
+      <div class="spy-boss" id="spy-bosshud" style="display:none">
+        <div class="sb-name">MOTHERSHIP</div>
+        <div class="sb-bar"><i id="sb-fill"></i></div>
+        <div class="sb-phase" id="sb-phase">PHASE 1 — TURRETS</div>
+      </div>
+    `;
+    document.getElementById('hud').appendChild(hud);
+    spy.hudEl = hud;
+  }
+  if (hud) hud.style.display = show ? 'block' : 'none';
+}
+
+function spyUpdateHUD() {
+  const fill = document.getElementById('spy-efill');
+  const hp = document.getElementById('spy-ehp');
+  if (fill) {
+    const pct = clamp(spy.hp / SPY.HP_MAX * 100, 0, 100);
+    fill.style.width = pct + '%';
+    fill.style.background = pct > 50 ? '#00f0ff' : pct > 25 ? '#ffd23f' : '#ff3b5c';
+  }
+  if (hp) hp.textContent = Math.ceil(spy.hp);
+
+  // Piezas
+  for (let i = 0; i < 4; i++) {
+    const el = document.getElementById('sp' + i);
+    if (el) el.classList.toggle('got', i < spy.pieces);
+  }
+
+  // Arma actual
+  const wEl = document.getElementById('spy-weapon');
+  if (wEl) {
+    const names = ['', '🔫 MACHINE GUN', '🔫💣 + BOMBS', '🔫💣🚀 + MISSILES'];
+    wEl.textContent = names[spy.weapon] || '';
+  }
+
+  // Boss HUD
+  if (spy.phase === 'boss' || spy.phase === 'air') {
+    const bossHud = document.getElementById('spy-bosshud');
+    if (bossHud && spy.phase === 'boss') {
+      bossHud.style.display = 'block';
+      const totalHP = spy.turretHP[0] + spy.turretHP[1] + spy.coreHP;
+      const maxHP = SPY.TURRET_HP * 2 + SPY.CORE_HP;
+      const fill = document.getElementById('sb-fill');
+      if (fill) fill.style.width = (totalHP / maxHP * 100) + '%';
+      const phase = document.getElementById('sb-phase');
+      if (phase) phase.textContent = spy.bossPhase === 1 ? 'PHASE 1 — DESTROY TURRETS' : 'PHASE 2 — HIT THE CORE';
+    }
+  }
+}
+
+/* ============================================================
+   UPDATE: FASE DE SUELO
+   ============================================================ */
+
+function spyUpdateGround(dt) {
+  const dist = run.dist;
+
+  // --- Regeneración ---
+  spy.lastDmg += dt;
+  if (spy.lastDmg > SPY.REGEN_DELAY && spy.hp < SPY.HP_MAX) {
+    spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.REGEN_RATE * dt);
+  }
+
+  // --- Spawn enemigos ---
+  spy.nextEnemy -= dt;
+  if (spy.nextEnemy <= 0) {
+    spy.nextEnemy = SPY.ENEMY_INTERVAL * rand(0.7, 1.3);
+    const lane = randInt(0, 3);
+    const model = buildEnemyCar();
+    const e = {
+      model, lane, x: LANES[lane], z: SPAWN_Z,
+      speed: rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX),
+      hp: 3, charging: false, chargeT: 0
+    };
+    model.root.position.set(e.x, 0, e.z);
+    spy.enemies.push(e);
+  }
+
+  // --- Spawn coches de pieza ---
+  if (spy.nextPiece < 4 && dist > SPY.PIECE_DIST[spy.nextPiece]) {
+    // Comprobar que no hay otro coche de pieza activo para esta pieza
+    if (!spy.pieceCars.some(p => p.pieceIndex === spy.nextPiece)) {
+      const lane = randInt(0, 3);
+      const model = buildPieceCar(spy.nextPiece);
+      const p = {
+        model, lane, x: LANES[lane], z: SPAWN_Z,
+        speed: rand(28, 34), hp: 3, pieceIndex: spy.nextPiece
+      };
+      model.root.position.set(p.x, 0, p.z);
+      spy.pieceCars.push(p);
+      toast('⚡ PIECE CAR AHEAD', SPY.PIECE_NAMES[spy.nextPiece], SPY.PIECE_COLORS[spy.nextPiece] ? '#' + SPY.PIECE_COLORS[spy.nextPiece].toString(16).padStart(6, '0') : '#ffd23f');
+    }
+  }
+
+  // --- Update enemigos ---
+  for (let i = spy.enemies.length - 1; i >= 0; i--) {
+    const e = spy.enemies[i];
+
+    // Mover hacia el jugador (embestida)
+    const dz = player.speed - e.speed;
+    e.z += dz * dt;
+
+    // Persecución lateral
+    const targetX = player.x;
+    const dx = targetX - e.x;
+    if (Math.abs(dx) > 0.5) {
+      e.x += Math.sign(dx) * 8 * dt;
+    }
+
+    e.model.root.position.set(e.x, 0, e.z);
+
+    // Fuera de rango
+    if (e.z > 40 || e.z < -400) {
+      scene.remove(e.model.root);
+      spy.enemies.splice(i, 1);
+      continue;
+    }
+
+    // Colisión con jugador
+    if (Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
+      spyDamage(SPY.DMG_ENEMY);
+      // Knockback al enemigo
+      e.z = -15;
+      e.speed = player.speed * 0.6;
+      flash('#ff3b5c');
+      shake = 0.6;
+      AudioSys.sfx('crash');
+      burst(player.x, 1, -1, 20, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2]], speed: 10, up: 6, life: 0.6, size: 0.4, spread: 0.5, grav: 10 });
+    }
+
+    // Hit por balas
+    for (let j = spy.bullets.length - 1; j >= 0; j--) {
+      const b = spy.bullets[j];
+      if (Math.abs(b.x - e.x) < 1.5 && Math.abs(b.z - e.z) < 2.5) {
+        e.hp -= b.dmg;
+        scene.remove(b.mesh);
+        spy.bullets.splice(j, 1);
+        burst(e.x, 1, e.z, 8, { colors: [[1, 0.8, 0.3]], speed: 6, up: 4, life: 0.3, size: 0.3, spread: 0.3, grav: 8 });
+        if (e.hp <= 0) {
+          scene.remove(e.model.root);
+          spy.enemies.splice(i, 1);
+          spy.score += 100;
+          addScore(100);
+          burst(e.x, 1, e.z, 30, { colors: [[1, 0.5, 0.1], [1, 0.8, 0.3], [1, 1, 0.7]], speed: 14, up: 8, life: 0.8, size: 0.5, spread: 0.5, grav: 12 });
+          AudioSys.sfx('powerup');
+          break;
+        }
+      }
+    }
+
+    // Parpadeo de luz roja del enemigo
+    if (e.model.warn) {
+      e.model.warn.material.opacity = 0.5 + Math.sin(simTime * 12) * 0.4;
+    }
+  }
+
+  // --- Update coches de pieza ---
+  for (let i = spy.pieceCars.length - 1; i >= 0; i--) {
+    const p = spy.pieceCars[i];
+    const dz = player.speed - p.speed;
+    p.z += dz * dt;
+    p.model.root.position.set(p.x, 0, p.z);
+
+    // Icono flotante
+    if (p.model.icon) {
+      p.model.icon.rotation.y += 2 * dt;
+      p.model.icon.position.y = 2.8 + Math.sin(simTime * 3) * 0.3;
+    }
+
+    // Fuera de rango → reaparece más adelante
+    if (p.z > 60) {
+      p.z = SPAWN_Z;
+      p.lane = randInt(0, 3);
+      p.x = LANES[p.lane];
+    }
+    if (p.z < -400) {
+      p.z = SPAWN_Z;
+      p.lane = randInt(0, 3);
+      p.x = LANES[p.lane];
+    }
+
+    // Colisión con jugador (embestida = recoge pieza)
+    if (Math.abs(p.x - player.x) < 2.2 && Math.abs(p.z) < 3.5) {
+      // Recoger pieza
+      spy.pieces = p.pieceIndex + 1;
+      spy.weapon = Math.min(3, spy.pieces);
+      spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.HEAL_PIECE);
+      spy.nextPiece = spy.pieces;
+
+      toast('✅ ' + SPY.PIECE_NAMES[p.pieceIndex], spy.pieces < 4 ? (4 - spy.pieces) + ' left' : 'TRANSFORM!', '#00f0ff');
+      AudioSys.sfx('powerup');
+      burst(p.x, 1.5, p.z, 25, { colors: [[0, 0.94, 1], [1, 0.17, 0.84]], speed: 12, up: 8, life: 0.7, size: 0.5, spread: 0.4, grav: 6 });
+
+      scene.remove(p.model.root);
+      spy.pieceCars.splice(i, 1);
+
+      // ¿Transformación?
+      if (spy.pieces >= 4) {
+        spy.phase = 'transform';
+        spy.transformT = 0;
+        toast('🛩️ TRANSFORMATION!', 'Taking flight...', '#ff2bd6');
+      }
+      continue;
+    }
+
+    // Hit por balas (también puede destruir coches de pieza para liberar la pieza)
+    for (let j = spy.bullets.length - 1; j >= 0; j--) {
+      const b = spy.bullets[j];
+      if (Math.abs(b.x - p.x) < 1.5 && Math.abs(b.z - p.z) < 2.5) {
+        p.hp -= b.dmg;
+        scene.remove(b.mesh);
+        spy.bullets.splice(j, 1);
+        burst(p.x, 1, p.z, 6, { colors: [[0, 0.94, 1]], speed: 5, up: 3, life: 0.3, size: 0.3, spread: 0.3, grav: 8 });
+        if (p.hp <= 0) {
+          // Pieza salta como pickup
+          spy.pieces = p.pieceIndex + 1;
+          spy.weapon = Math.min(3, spy.pieces);
+          spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.HEAL_PIECE);
+          spy.nextPiece = spy.pieces;
+
+          toast('✅ ' + SPY.PIECE_NAMES[p.pieceIndex], spy.pieces < 4 ? (4 - spy.pieces) + ' left' : 'TRANSFORM!', '#00f0ff');
+          AudioSys.sfx('powerup');
+          burst(p.x, 1.5, p.z, 30, { colors: [[0, 0.94, 1], [1, 0.82, 0.24]], speed: 14, up: 10, life: 0.8, size: 0.5, spread: 0.5, grav: 8 });
+
+          scene.remove(p.model.root);
+          spy.pieceCars.splice(i, 1);
+
+          if (spy.pieces >= 4) {
+            spy.phase = 'transform';
+            spy.transformT = 0;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // --- Disparar armas ---
+  if (spy.weapon >= 1) {
+    spy.gunCd -= dt;
+    if (spy.gunCd <= 0) {
+      spy.gunCd = SPY.GUN_RATE;
+      const b = spawnBullet(player.x, -4);
+      spy.bullets.push(b);
+    }
+  }
+  if (spy.weapon >= 2) {
+    spy.bombCd -= dt;
+    if (spy.bombCd <= 0) {
+      spy.bombCd = SPY.BOMB_RATE;
+      const b = spawnBomb(player.x, -5);
+      spy.bombProjs.push(b);
+    }
+  }
+
+  // --- Update balas ---
+  for (let i = spy.bullets.length - 1; i >= 0; i--) {
+    const b = spy.bullets[i];
+    b.z -= b.speed * dt;
+    b.mesh.position.z = b.z;
+    if (b.z < SPAWN_Z - 50) {
+      scene.remove(b.mesh);
+      spy.bullets.splice(i, 1);
+    }
+  }
+  for (let i = spy.bombProjs.length - 1; i >= 0; i--) {
+    const b = spy.bombProjs[i];
+    b.z -= b.speed * dt;
+    b.mesh.position.z = b.z;
+    b.mesh.position.y = 0.6 + Math.sin(-b.z * 0.1) * 0.3; // arco ligero
+    if (b.z < SPAWN_Z - 50) {
+      scene.remove(b.mesh);
+      spy.bombProjs.splice(i, 1);
+    }
+  }
+
+  // --- Colisión balas con tráfico inocente ---
+  traffic.forEach(v => {
+    if (v.knock) return;
+    // Balas que golpean tráfico inocente
+    for (let j = spy.bullets.length - 1; j >= 0; j--) {
+      const b = spy.bullets[j];
+      if (Math.abs(b.x - v.x) < 1.5 && Math.abs(b.z - v.z) < 2.5) {
+        scene.remove(b.mesh);
+        spy.bullets.splice(j, 1);
+        // Eliminar inocente = penalización
+        spyDamage(SPY.DMG_KILL);
+        knockVehicle(v, Math.sign(b.x - v.x));
+        flash('#ff9a3d');
+        toast('⚠️ CIVILIAN HIT', '-' + SPY.DMG_KILL + ' HP', '#ff3b5c');
+      }
+    }
+  });
+
+  // --- Colisión jugador con tráfico inocente ---
+  traffic.forEach(v => {
+    if (v.knock || v.passed) return;
+    if (Math.abs(v.x - player.x) < 1.8 && Math.abs(v.z) < 3) {
+      spyDamage(SPY.DMG_TRAFFIC);
+      knockVehicle(v, Math.sign(player.x - v.x) || 1);
+      v.passed = true;
+      flash('#ffd23f');
+      shake = 0.4;
+    }
+  });
+
+  // Puntos por distancia
+  spy.score += dt * 5;
+}
+
+/* ============================================================
+   DAÑO Y MUERTE
+   ============================================================ */
+
+function spyDamage(amount) {
+  spy.hp -= amount;
+  spy.lastDmg = 0;
+  buzz([50, 30, 80]);
+  if (spy.hp <= 0) {
+    spy.hp = 0;
+    spy.phase = 'dead';
+    // Crash del coche
+    state = 'crashing';
+    crashT = 0;
+    player.spin = rand(-6, 6);
+    player.vy = 5;
+    AudioSys.sfx('crash');
+    burst(player.x, 1, -1, 50, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2], [1, 1, 0.7]], speed: 16, up: 10, life: 1, size: 0.6, spread: 0.6, grav: 14 });
+    setTimeout(() => spyEnd(false), 1500);
+  }
+}
+
+/* ============================================================
+   TRANSFORMACIÓN (suelo → aire)
+   ============================================================ */
+
+function spyUpdateTransform(dt) {
+  spy.transformT += dt;
+  const t = spy.transformT;
+  const dur = 3.5; // duración total de la transformación
+
+  if (t < dur) {
+    // Fase 1: coche acelera y se levanta
+    const lift = clamp(t / dur, 0, 1);
+    const h = lift * lift * SPY.AIR_Y;
+    // Mover la cámara gradualmente hacia arriba y atrás
+    camera.position.y = lerp(4.5, SPY.AIR_Y + 20, smooth(0, 1, lift));
+    camera.position.z = lerp(10.5, 5, smooth(0, 1, lift));
+    camera.lookAt(player.x, h, -10);
+
+    // Ocultar el coche del jugador gradualmente
+    if (t > dur * 0.4) {
+      // Mostrar el avión
+      spy.plane.root.visible = true;
+      spy.plane.root.position.set(player.x, h, -2);
+      spy.plane.root.rotation.set(0, 0, 0);
+      spy.plane.body.rotation.z = Math.sin(t * 2) * 0.1;
+    }
+  } else {
+    // Transformación completa → fase aérea
+    spy.phase = 'air';
+    spy.planeX = player.x;
+    spy.planeZ = -20;
+    spy.plane.root.visible = true;
+    spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
+
+    // Limpiar tráfico y entidades de suelo
+    while (traffic.length) releaseVehicle(traffic.pop());
+    spy.enemies.forEach(e => scene.remove(e.model.root));
+    spy.enemies = [];
+    spy.pieceCars.forEach(p => scene.remove(p.model.root));
+    spy.pieceCars = [];
+    spy.bullets.forEach(b => scene.remove(b.mesh));
+    spy.bullets = [];
+    spy.bombProjs.forEach(b => scene.remove(b.mesh));
+    spy.bombProjs = [];
+
+    // Preparar jefe
+    spy.boss.root.visible = true;
+    spy.boss.root.position.set(0, SPY.BOSS_Y, SPY.BOSS_Z);
+
+    spy.phase = 'boss';
+    spy.bossPhase = 1;
+    spy.attackCd = 2;
+
+    toast('⚠️ MOTHERSHIP DETECTED', 'Destroy the turrets!', '#ff4444');
+
+    // Mostrar HUD del jefe
+    const bossHud = document.getElementById('spy-bosshud');
+    if (bossHud) bossHud.style.display = 'block';
+  }
+}
+
+/* ============================================================
+   UPDATE: FASE AÉREA / JEFE
+   ============================================================ */
+
+function spyUpdateAir(dt) {
+  if (!spy.plane || !spy.boss) return;
+
+  spy.bossT += dt;
+
+  // --- Movimiento del avión ---
+  // left/right = X, brake = hacia el jefe (adelante), nitro = atrás (dodge)
+  const moveX = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  const moveZ = (input.brake ? -1 : 0) + (input.nitro ? 1 : 0);
+  spy.planeX += moveX * SPY.AIR_SPEED * dt;
+  spy.planeZ += moveZ * SPY.AIR_SPEED * 0.6 * dt;
+  spy.planeX = clamp(spy.planeX, -SPY.AIR_FIELD_W / 2, SPY.AIR_FIELD_W / 2);
+  spy.planeZ = clamp(spy.planeZ, spy.boss.root.position.z + 20, 10);
+
+  spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
+  spy.plane.body.rotation.z = -moveX * 0.3;
+  spy.plane.body.rotation.x = moveZ * 0.1;
+
+  // Propulsores parpadean
+  if (spy.plane.thrL) {
+    const sc = 0.8 + Math.sin(simTime * 15) * 0.2;
+    spy.plane.thrL.scale.set(sc, sc, sc);
+    spy.plane.thrR.scale.set(sc, sc, sc);
+  }
+
+  // --- Cámara aérea (cenital con perspectiva) ---
+  camera.position.set(spy.planeX * 0.3, SPY.AIR_Y + 30, spy.planeZ + 25);
+  camera.lookAt(spy.planeX * 0.5, SPY.AIR_Y, spy.planeZ - 10);
+
+  // --- Disparar misiles ---
+  spy.missileCd -= dt;
+  if (spy.missileCd <= 0) {
+    spy.missileCd = SPY.MISSILE_RATE;
+    // 2 misiles por salva, apuntando al jefe
+    const bx = spy.boss.root.position.x, bz = spy.boss.root.position.z;
+    spy.missiles.push(spawnMissile(spy.planeX - 1.5, spy.planeZ - 1, bx + rand(-2, 2), bz + rand(-1, 1)));
+    spy.missiles.push(spawnMissile(spy.planeX + 1.5, spy.planeZ - 1, bx + rand(-2, 2), bz + rand(-1, 1)));
+    AudioSys.sfx('nitro'); // sonido como placeholder
+  }
+
+  // --- Update misiles ---
+  for (let i = spy.missiles.length - 1; i >= 0; i--) {
+    const m = spy.missiles[i];
+    m.x += m.vx * dt;
+    m.z += m.vz * dt;
+    m.mesh.position.set(m.x, m.y, m.z);
+
+    // Colisión con el jefe
+    const bossPos = spy.boss.root.position;
+    const relX = m.x - bossPos.x, relZ = m.z - bossPos.z;
+
+    let hit = false;
+
+    if (spy.bossPhase === 1) {
+      // Fase 1: solo se puede golpear las torretas
+      spy.boss.turrets.forEach((t, ti) => {
+        if (!t.alive) return;
+        const tx = bossPos.x + t.side * 6, tz = bossPos.z;
+        if (Math.abs(m.x - tx) < 2 && Math.abs(m.z - tz) < 2.5) {
+          spy.turretHP[ti] -= m.dmg;
+          hit = true;
+          burst(m.x, SPY.BOSS_Y, m.z, 8, { colors: [[1, 0.5, 0.2], [0.7, 0.3, 0.1]], speed: 8, up: 4, life: 0.4, size: 0.4, spread: 0.5, grav: 6 });
+          if (spy.turretHP[ti] <= 0) {
+            spy.turretHP[ti] = 0;
+            t.alive = false;
+            t.base.material = basic({ color: 0x222222, transparent: true, opacity: 0.5 });
+            t.barrel.visible = false;
+            burst(tx, SPY.BOSS_Y - 1, tz, 40, { colors: [[1, 0.6, 0.1], [1, 0.3, 0]], speed: 16, up: 10, life: 1.2, size: 0.7, spread: 1, grav: 8 });
+            toast('💥 TURRET DESTROYED', spy.turretHP.every(h => h <= 0) ? 'CORE EXPOSED!' : '1 turret left', '#ffd23f');
+            if (spy.turretHP.every(h => h <= 0)) {
+              spy.bossPhase = 2;
+              spy.boss.armor.visible = false;
+              spy.attackCd = 1; // ataques más rápidos
+              toast('⚡ PHASE 2', 'Hit the core!', '#ff2bd6');
+            }
+          }
+        }
+      });
+    } else {
+      // Fase 2: golpear el núcleo
+      if (Math.abs(relX) < 3 && Math.abs(relZ) < 3) {
+        spy.coreHP -= m.dmg;
+        hit = true;
+        burst(m.x, SPY.BOSS_Y - 2, m.z, 6, { colors: [[1, 0.2, 0.2], [1, 0.5, 0]], speed: 6, up: 3, life: 0.3, size: 0.3, spread: 0.4, grav: 6 });
+        // Pulso en el núcleo
+        spy.boss.core.scale.set(1.3, 1.3, 1.3);
+        if (spy.coreHP <= 0) {
+          spy.coreHP = 0;
+          // Victoria
+          bossExplode();
+          return;
+        }
+      }
+    }
+
+    if (hit || m.z < bossPos.z - 15 || m.z > 20) {
+      scene.remove(m.mesh);
+      spy.missiles.splice(i, 1);
+    }
+  }
+
+  // --- Boss: escala del núcleo vuelve a normal ---
+  if (spy.boss.core) {
+    const s = spy.boss.core.scale.x;
+    if (s > 1) spy.boss.core.scale.setScalar(Math.max(1, s - dt * 3));
+  }
+
+  // --- Boss: movimiento lateral lento ---
+  spy.boss.root.position.x = Math.sin(spy.bossT * 0.3) * 4;
+
+  // --- Boss: engranajes giran ---
+  spy.boss.root.children.forEach(c => {
+    if (c.geometry && c.geometry.type === 'TorusGeometry') {
+      c.rotation.z += dt * 1.5;
+    }
+  });
+
+  // --- Boss: ataques ---
+  spy.attackCd -= dt;
+  if (spy.attackCd <= 0) {
+    spy.attackCd = SPY.ATTACK_CD * (spy.bossPhase === 2 ? 0.6 : 1);
+    if (spy.bossPhase === 2 && Math.random() < 0.4) {
+      // Fase 2: a veces combina ambos
+      spy.attacks.push(bossBeamAttack());
+      spy.attacks.push(bossAreaAttack());
+    } else {
+      spy.attacks.push(Math.random() < 0.5 ? bossBeamAttack() : bossAreaAttack());
+    }
+  }
+
+  // --- Update ataques ---
+  for (let i = spy.attacks.length - 1; i >= 0; i--) {
+    const a = spy.attacks[i];
+    a.t += dt;
+
+    if (a.type === 'beam') {
+      // Warning pulse
+      if (a.warn && a.t < a.warnDur) {
+        a.warn.material.opacity = 0.15 + Math.sin(a.t * 15) * 0.15;
+      }
+      // Disparar
+      if (a.t >= a.warnDur && !a.fired) {
+        a.fired = true;
+        if (a.warn) { a.warn.material.opacity = 0.8; a.warn.material.color.set(0xff0000); }
+        // Comprobar si el jugador está en la franja
+        if (Math.abs(spy.planeZ - a.z) < a.halfH) {
+          // Muerte instantánea en aire (prototipo)
+          spy.phase = 'dead';
+          planeExplode();
+          setTimeout(() => spyEnd(false), 1500);
+          return;
+        }
+      }
+      // Terminar
+      if (a.t >= a.warnDur + a.fireDur) {
+        if (a.warn) scene.remove(a.warn);
+        spy.attacks.splice(i, 1);
+      }
+    }
+
+    if (a.type === 'area') {
+      // Warning pulse
+      if (a.t < a.warnDur) {
+        a.zones.forEach(z => {
+          if (z.warn) z.warn.material.opacity = 0.15 + Math.sin(a.t * 12) * 0.15;
+        });
+      }
+      // Detonar
+      if (a.t >= a.warnDur && !a.fired) {
+        a.fired = true;
+        a.zones.forEach(z => {
+          if (z.warn) { z.warn.material.opacity = 0.6; z.warn.material.color.set(0xff4400); }
+          burst(z.x, SPY.AIR_Y, z.z, 15, { colors: [[1, 0.5, 0.1], [1, 0.3, 0]], speed: 10, up: 5, life: 0.6, size: 0.5, spread: 1, grav: 4 });
+          // Comprobar si el jugador está en la zona
+          const dx = spy.planeX - z.x, dz = spy.planeZ - z.z;
+          if (Math.sqrt(dx * dx + dz * dz) < z.r) {
+            spy.phase = 'dead';
+            planeExplode();
+            setTimeout(() => spyEnd(false), 1500);
+            return;
+          }
+        });
+      }
+      // Terminar
+      if (a.t >= a.warnDur + a.fireDur + 0.3) {
+        a.zones.forEach(z => { if (z.warn) scene.remove(z.warn); });
+        spy.attacks.splice(i, 1);
+      }
+    }
+  }
+}
+
+/* ============================================================
+   EXPLOSIONES
+   ============================================================ */
+
+function planeExplode() {
+  if (!spy.plane) return;
+  const p = spy.plane.root.position;
+  burst(p.x, p.y, p.z, 60, { colors: [[1, 0.5, 0.1], [0, 0.9, 1], [1, 0.17, 0.84]], speed: 20, up: 12, life: 1.2, size: 0.7, spread: 1, grav: 6 });
+  spy.plane.root.visible = false;
+  flash('#ff3b5c');
+  shake = 1.5;
+  AudioSys.sfx('crash');
+}
+
+function bossExplode() {
+  if (!spy.boss) return;
+  const p = spy.boss.root.position;
+
+  // Explosión en cadena
+  let delay = 0;
+  for (let i = 0; i < 8; i++) {
+    setTimeout(() => {
+      const ox = rand(-6, 6), oz = rand(-3, 3);
+      burst(p.x + ox, SPY.BOSS_Y + rand(-2, 2), p.z + oz, 40,
+        { colors: [[1, 0.6, 0.1], [1, 0.3, 0], [1, 0.9, 0.4]], speed: 18, up: 10, life: 1.5, size: 0.8, spread: 1, grav: 5 });
+      shake = 1;
+      flash(i < 4 ? '#ff6b2b' : '#ffd23f');
+    }, delay);
+    delay += 300;
+  }
+
+  setTimeout(() => {
+    spy.boss.root.visible = false;
+    // Gran explosión final
+    burst(p.x, SPY.BOSS_Y, p.z, 100,
+      { colors: [[1, 0.8, 0.3], [1, 0.5, 0.1], [1, 1, 0.7]], speed: 25, up: 15, life: 2, size: 1, spread: 2, grav: 3 });
+    shake = 2;
+    flash('#ffffff');
+    spyEnd(true);
+  }, delay + 500);
+}
+
+/* ============================================================
+   MAIN UPDATE (llamado cada frame si spy.mode)
+   ============================================================ */
+
+function spyUpdate(dt) {
+  if (!spy.mode || spy.phase === 'off' || spy.phase === 'win' || spy.phase === 'dead') return;
+
+  if (spy.phase === 'ground') {
+    spyUpdateGround(dt);
+  } else if (spy.phase === 'transform') {
+    spyUpdateTransform(dt);
+  } else if (spy.phase === 'boss') {
+    spyUpdateAir(dt);
+  }
+
+  spyUpdateHUD();
+}
+
+/* ============================================================
+   FX (llamado en el render loop)
+   ============================================================ */
+
+function spyFx(t) {
+  // Nada por ahora — se usará para efectos visuales adicionales
+}
+
+/* ============================================================
+   ACCIÓN / INTEGRACIÓN
+   ============================================================ */
+
+function openSpyPre() {
+  show('spypre');
+}
+
+Object.assign(actions, {
+  spy: openSpyPre,
+  'spy-start'() { spy.mode = true; spyStart(); startRun(); },
+  'spy-back'() { spy.mode = false; show('menu'); },
+});
+
+// Wrap play para desactivar spy.mode cuando se juega normal
+const _spPlay = actions.play;
+actions.play = function () { spy.mode = false; spyReset(); _spPlay(); };
+
+// Wrap startRun para preparar SPY mode si está activo
+const _origStartRun = startRun;
+startRun = function () {
+  _origStartRun();
+  if (spy.mode) {
+    spyStart();
+  }
+};
+
+// Badge de Spy Hunter
+if (typeof BADGES !== 'undefined') {
+  BADGES.push({
+    id: 'spyhunter', name: 'SPY HUNTER',
+    colors: ['#1a2a4a', '#ff2bd6'],
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 2L4 8v6c0 5.5 3.5 10 8 11 4.5-1 8-5.5 8-11V8l-8-6zm0 2.3l6 4.5v5.2c0 4.4-2.7 8-6 8.9-3.3-.9-6-4.5-6-8.9V8.8l6-4.5z" fill="currentColor"/><path d="M12 10l-2 4h1.5v4l3-5h-1.5z" fill="currentColor"/></svg>',
+    goal: 'Defeat the Spy Hunter Boss',
+    val: (R, S) => S.badges && S.badges.spyhunter ? 1 : 0,
+    reward: 2000
+  });
+}
+
+/* ============================================================
+   CSS (inyectado por build.py como texto)
+   ============================================================ */
+const SPY_CSS = `
+#spyhud { position:absolute; left:12px; top:50%; transform:translateY(-50%); z-index:10; pointer-events:none; display:none; }
+.spy-energy { margin-bottom:8px; }
+.spy-ebar { width:120px; height:10px; background:rgba(0,0,0,0.6); border-radius:5px; overflow:hidden; border:1px solid rgba(255,255,255,0.15); }
+.spy-ebar i { display:block; height:100%; width:100%; background:#00f0ff; transition:width 0.15s, background 0.15s; border-radius:5px; }
+#spy-ehp { font-size:11px; color:#fff; display:block; text-align:center; margin-top:2px; text-shadow:0 0 4px rgba(0,0,0,0.8); }
+.spy-pieces { display:flex; gap:4px; margin-bottom:6px; }
+.spy-pieces .sp { font-size:16px; opacity:0.3; filter:grayscale(1); transition:all 0.3s; }
+.spy-pieces .sp.got { opacity:1; filter:grayscale(0); transform:scale(1.2); }
+.spy-weapon { font-size:11px; color:#ffd23f; text-shadow:0 0 6px rgba(255,210,63,0.5); letter-spacing:0.5px; }
+.spy-boss { position:absolute; top:12px; left:50%; transform:translateX(-50%); text-align:center; display:none; }
+.sb-name { font-size:11px; color:#ff4444; letter-spacing:2px; text-shadow:0 0 8px rgba(255,68,68,0.5); margin-bottom:4px; }
+.sb-bar { width:200px; height:8px; background:rgba(0,0,0,0.6); border-radius:4px; overflow:hidden; border:1px solid rgba(255,68,68,0.3); }
+.sb-bar i { display:block; height:100%; width:100%; background:linear-gradient(90deg,#ff4444,#ff8833); transition:width 0.2s; border-radius:4px; }
+.sb-phase { font-size:9px; color:rgba(255,255,255,0.6); margin-top:3px; letter-spacing:1px; }
+`;
+
+// Inyectar CSS dinámicamente
+(function injectSpyCSS() {
+  const style = document.createElement('style');
+  style.textContent = SPY_CSS;
+  document.head.appendChild(style);
+})();
+
+/* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
    - Ranking: diario (reto), hoy, semana y siempre. Mejor marca por jugador.
    - Reto diario: mismo coche de serie, mismas zonas/túneles y misma hora del día
@@ -10536,7 +11736,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '1cd79fbf';
+window.NS_BUILD = '15adb1fa';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
