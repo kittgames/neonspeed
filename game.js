@@ -10300,19 +10300,95 @@ function buildEnemyCar() {
   return m;
 }
 
-/* --- Coche de pieza (brillante, color según pieza) --- */
+/* --- Coche de pieza (furgoneta blindada con beacon) --- */
 function buildPieceCar(pieceIndex) {
   const color = SPY.PIECE_COLORS[pieceIndex];
-  const m = buildCar({ color, accent: 0xffffff, style: 'suv' });
-  // Icono flotante sobre el coche
-  const iconGeo = new THREE.SphereGeometry(0.6, 4, 3);
-  const iconMat = basic({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-  const icon = new THREE.Mesh(iconGeo, iconMat);
-  icon.position.set(0, 2.8, 0);
-  m.root.add(icon);
-  m.icon = icon;
-  m.pieceIndex = pieceIndex;
-  return m;
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const matBody = std({ color: 0x111111, metalness: 0.9, roughness: 0.2 });
+  const matGlow = basic({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const matStripe = std({ color, metalness: 0.7, roughness: 0.3, emissive: color, emissiveIntensity: 0.6 });
+
+  // --- Furgoneta blindada (más grande y distinta que un coche) ---
+  // Chasis bajo
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 5.2), matBody);
+  chassis.position.y = 0.3;
+  body.add(chassis);
+  // Cabina alta
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.6, 3.8), matBody);
+  cabin.position.set(0, 1.3, -0.3);
+  body.add(cabin);
+  // Techo
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.15, 4.0), matStripe);
+  roof.position.set(0, 2.15, -0.3);
+  body.add(roof);
+  // Ruedas (4)
+  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.35, 8);
+  const wheelMat = std({ color: 0x222222, metalness: 0.3, roughness: 0.8 });
+  for (let sx = -1; sx <= 1; sx += 2) {
+    for (let sz = -1; sz <= 1; sz += 2) {
+      const w = new THREE.Mesh(wheelGeo, wheelMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(sx * 1.3, 0.5, sz * 1.6);
+      body.add(w);
+    }
+  }
+  // Franjas laterales de color (identifican la pieza)
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 4.0), matStripe);
+    stripe.position.set(sx * 1.21, 1.3, -0.3);
+    body.add(stripe);
+  }
+  // Franja frontal de color
+  const fStripe = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 0.08), matStripe);
+  fStripe.position.set(0, 1.0, -2.3);
+  body.add(fStripe);
+
+  // --- BEACON: columna de luz vertical ---
+  const beaconGeo = new THREE.CylinderGeometry(0.15, 0.4, 8, 6);
+  const beaconMat = basic({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+  const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+  beacon.position.set(0, 6, 0);
+  root.add(beacon);
+
+  // --- ANILLO giratorio horizontal ---
+  const ringGeo = new THREE.TorusGeometry(2.5, 0.08, 4, 24);
+  const ringMat = basic({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.set(0, 2.5, 0);
+  root.add(ring);
+
+  // --- Segundo anillo (más grande, opuesto) ---
+  const ring2 = new THREE.Mesh(
+    new THREE.TorusGeometry(3.2, 0.06, 4, 24),
+    basic({ color, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  ring2.rotation.x = Math.PI / 2;
+  ring2.position.set(0, 1.8, 0);
+  root.add(ring2);
+
+  // --- Icono pieza (diamante rotatorio arriba) ---
+  const iconGeo = new THREE.SphereGeometry(0.5, 4, 2);
+  const icon = new THREE.Mesh(iconGeo, matGlow);
+  icon.position.set(0, 3.5, 0);
+  root.add(icon);
+
+  // --- Pulso de suelo (onda expansiva) ---
+  const pulseGeo = new THREE.TorusGeometry(1.5, 0.12, 4, 20);
+  const pulseMat = basic({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+  const pulse = new THREE.Mesh(pulseGeo, pulseMat);
+  pulse.rotation.x = Math.PI / 2;
+  pulse.position.y = 0.3;
+  root.add(pulse);
+
+  return {
+    root, body, icon, beacon, ring, ring2, pulse,
+    beaconMat, ringMat, pulseMat,
+    pieceIndex
+  };
 }
 
 /* --- Avión enemigo steampunk (biplano con boca de tiburón) --- */
@@ -11330,10 +11406,23 @@ function spyUpdateGround(dt) {
     p.z += dz * dt;
     p.model.root.position.set(p.x, 0, p.z);
 
-    // Icono flotante
-    if (p.model.icon) {
-      p.model.icon.rotation.y += 2 * dt;
-      p.model.icon.position.y = 2.8 + Math.sin(simTime * 3) * 0.3;
+    // Animación visual del coche de pieza
+    const m = p.model;
+    if (m.icon) {
+      m.icon.rotation.y += 3 * dt;
+      m.icon.position.y = 3.5 + Math.sin(simTime * 3) * 0.4;
+      m.icon.scale.setScalar(0.8 + Math.sin(simTime * 5) * 0.2);
+    }
+    if (m.ring) m.ring.rotation.z += 2.5 * dt;
+    if (m.ring2) m.ring2.rotation.z -= 1.8 * dt;
+    if (m.beacon) {
+      m.beaconMat.opacity = 0.2 + Math.sin(simTime * 4) * 0.15;
+    }
+    if (m.pulse) {
+      const pt = (simTime * 0.8) % 1;  // ciclo 0→1
+      const sc = 1 + pt * 3;
+      m.pulse.scale.set(sc, sc, 1);
+      m.pulseMat.opacity = 0.5 * (1 - pt);
     }
 
     // Fuera de rango → reaparece más adelante
@@ -12874,7 +12963,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '05aa41c0';
+window.NS_BUILD = '561756d0';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
