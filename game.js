@@ -10033,7 +10033,7 @@ Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.
 const SPY = {
   /* energía */
   HP_MAX: 100,
-  DMG_ENEMY:    25,   // embestida de enemigo
+  DMG_ENEMY:    20,   // embestida de enemigo
   DMG_TRAFFIC:  15,   // choque con tráfico inocente
   DMG_KILL:     30,   // eliminar inocente
   HEAL_PIECE:   20,   // recoger pieza
@@ -10446,8 +10446,26 @@ function buildPieceCar(pieceIndex) {
   pulse.position.y = 0.3;
   root.add(pulse);
 
+  // --- Cartel horizontal (se lee desde la cámara cenital) ---
+  const hex = '#' + color.toString(16).padStart(6, '0');
+  const cv = document.createElement('canvas'); cv.width = 768; cv.height = 180;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgba(8,10,30,0.88)'; g.strokeStyle = hex; g.lineWidth = 10;
+  g.beginPath(); g.roundRect(8, 8, 752, 164, 40); g.fill(); g.stroke();
+  g.fillStyle = hex; g.font = 'bold 70px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(['🔫', '💣', '🚀', '✈️'][pieceIndex] + ' ' + SPY.PIECE_NAMES[pieceIndex], 384, 94);
+  const lt = new THREE.CanvasTexture(cv); lt.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(13, 3.05), basic({ map: lt, transparent: true, depthWrite: false, depthTest: false }));
+  label.rotation.x = -Math.PI / 2; label.position.set(0, 4.2, -5.2); label.renderOrder = 20;
+  root.add(label);
+  // --- Halo grande en la carretera ---
+  const haloMat = basic({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false });
+  const halo = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 0.02, 32), haloMat);
+  halo.position.y = 0.06;
+  root.add(halo);
+
   return {
-    root, body, icon, beacon, ring, ring2, pulse,
+    root, body, icon, beacon, ring, ring2, pulse, label, halo, haloMat,
     beaconMat, ringMat, pulseMat,
     pieceIndex
   };
@@ -11023,17 +11041,23 @@ function buildBoss() {
 /* ============================================================
    PROYECTILES
    ============================================================ */
-const _bulletGeo = new THREE.SphereGeometry(0.15, 4, 4);
-const _bulletMat = basic({ color: 0xffd23f, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
-const _bombGeo = new THREE.SphereGeometry(0.3, 6, 6);
+const _bulletGeo = new THREE.CylinderGeometry(0.32, 0.32, 3.6, 6);
+_bulletGeo.rotateX(Math.PI / 2);
+const _bulletMat = basic({ color: 0xffe14a, blending: THREE.AdditiveBlending, transparent: true, opacity: 1, depthWrite: false });
+const _bulletGlowGeo = new THREE.CylinderGeometry(0.95, 0.95, 4.6, 8);
+_bulletGlowGeo.rotateX(Math.PI / 2);
+const _bulletGlowMat = basic({ color: 0xff8a00, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.45, depthWrite: false });
+const _bombGeo = new THREE.SphereGeometry(0.55, 10, 8);
 const _bombMat = basic({ color: 0xff6b2b, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
-const _missileGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6);
+const _missileGeo = new THREE.CylinderGeometry(0.2, 0.2, 2, 6);
 _missileGeo.rotateX(Math.PI / 2);
 const _missileMat = basic({ color: 0xff2bd6, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
 
 function spawnBullet(x, z) {
   const mesh = new THREE.Mesh(_bulletGeo, _bulletMat);
-  mesh.position.set(x, 0.8, z);
+  mesh.add(new THREE.Mesh(_bulletGlowGeo, _bulletGlowMat));
+  mesh.renderOrder = 9;
+  mesh.position.set(x, 1.0, z);
   scene.add(mesh);
   return { mesh, x, z, speed: SPY.GUN_SPEED, dmg: SPY.GUN_DMG };
 }
@@ -11297,16 +11321,21 @@ function spyUpdateGround(dt) {
   spy.nextEnemy -= dt;
   if (spy.nextEnemy <= 0) {
     spy.nextEnemy = SPY.ENEMY_INTERVAL * rand(0.7, 1.3);
-    const lane = randInt(0, 3);
-    const model = buildEnemyCar();
-    const e = {
-      model, lane, x: LANES[lane], z: SPAWN_Z,
-      speed: rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX),
-      hp: 3, charging: false, charged: false, chargeT: 0,
-      chargeVelZ: 0, chargeTargetX: 0, hitCd: 0
-    };
-    model.root.position.set(e.x, 0, e.z);
-    spy.enemies.push(e);
+    if (spy.enemies.length < 2) {
+      const model = buildEnemyCar();
+      const behind = Math.random() < 0.6;
+      const side = spyPickSide();
+      const e = {
+        model, x: clamp(player.x + side * 5, -7, 7), z: behind ? 22 : -95,
+        speed: player.speed + (behind ? 16 : -14),
+        hp: 3, state: 'approach', side, t: 0, wait: rand(0.5, 1.1), vx: 0,
+        charging: false, charged: false, chargeT: 0, chargeVelZ: 0, chargeTargetX: 0, hitCd: 0
+      };
+      model.root.position.set(e.x, 0, e.z);
+      scene.add(model.root);
+      spy.enemies.push(e);
+      if (behind) toast('⚠ HOSTILE BEHIND', 'it will try to ram you', '#ff3b5c');
+    }
   }
 
   // --- Spawn coches de pieza ---
@@ -11319,7 +11348,9 @@ function spyUpdateGround(dt) {
         model, lane, x: LANES[lane], z: SPAWN_Z,
         speed: rand(28, 34), hp: 3, pieceIndex: spy.nextPiece
       };
+      p.z = -140; p.speed = player.speed - 20;
       model.root.position.set(p.x, 0, p.z);
+      scene.add(model.root);
       spy.pieceCars.push(p);
       toast('⚡ PIECE CAR AHEAD', SPY.PIECE_NAMES[spy.nextPiece], SPY.PIECE_COLORS[spy.nextPiece] ? '#' + SPY.PIECE_COLORS[spy.nextPiece].toString(16).padStart(6, '0') : '#ffd23f');
     }
@@ -11329,74 +11360,40 @@ function spyUpdateGround(dt) {
   for (let i = spy.enemies.length - 1; i >= 0; i--) {
     const e = spy.enemies[i];
 
-    // === IA de embestida en 3 fases ===
-    const distToPlayer = e.z; // e.z es relativo al jugador (0 = misma Z)
-
-    if (!e.charging && !e.charged) {
-      // FASE 1: Aproximación — se acerca por detrás alineándose
-      const dz = player.speed - e.speed;
-      e.z += dz * dt;
-
-      // Persecución lateral (velocidad normal)
-      const dx = player.x - e.x;
-      if (Math.abs(dx) > 0.3) {
-        e.x += Math.sign(dx) * SPY.ENEMY_STEER * dt;
-      }
-
-      // Activar carga cuando está cerca y alineado
-      if (distToPlayer > -SPY.ENEMY_CHARGE_DIST && distToPlayer < -4 && Math.abs(player.x - e.x) < 3) {
-        e.charging = true;
-        e.chargeT = 0;
-        e.chargeTargetX = player.x; // fija el objetivo
-      }
-    } else if (e.charging && e.chargeT < SPY.ENEMY_WARN_TIME) {
-      // FASE 2: Aviso — frena brevemente, destello rojo intenso, sacudida
-      e.chargeT += dt;
-      // Frena para crear tensión
-      e.z += (player.speed - e.speed * 0.4) * dt;
-      // Zigzag amenazante
-      e.x += Math.sin(e.chargeT * 20) * 15 * dt;
-      // Flash rojo rápido en la luz
-      if (e.model.warn) {
-        e.model.warn.material.opacity = 1;
-        e.model.warn.scale.setScalar(1 + Math.sin(e.chargeT * 30) * 0.5);
-        e.model.warn.material.color.setHex(0xff0000);
-      }
-      // Chispas de los neumáticos durante el frenado
-      if (Math.random() < 0.6) {
-        burst(e.x + rand(-0.8, 0.8), 0.1, e.z, 2, {
-          colors: [[1, 0.6, 0.2], [1, 0.9, 0.4]], speed: 4, up: 2, life: 0.2, size: 0.15, spread: 0.4, grav: 15
-        });
-      }
-    } else if (e.charging) {
-      // FASE 3: ¡CARGA! — aceleración brutal hacia el jugador
-      e.charged = true;
-      e.charging = false;
-      e.chargeVelZ = SPY.ENEMY_CHARGE_SPEED; // velocidad extra de embestida
-      e.chargeTargetX = player.x; // actualiza target al momento de cargar
+    // === IA: se pone a tu lado, avisa y te embiste de lado; luego se adelanta ===
+    if (e.state === 'ram' && !e.charged) { e.state = 'retreat'; e.t = 0; } // una bala/bomba cortó la embestida
+    e.t += dt;
+    let zT = -0.5;
+    if (e.state === 'retreat') zT = -18;
+    // velocidad con aceleración limitada: si frenas o aceleras de golpe, se te escapa
+    const want = player.speed + clamp((e.z - zT) * 1.4, -22, 22);
+    e.speed += clamp(want - e.speed, -16 * dt, 16 * dt);
+    e.z += (player.speed - e.speed) * dt;
+    const tx = clamp(player.x + e.side * 3.6, -7.2, 7.2);
+    if (e.state === 'approach' || e.state === 'shadow') {
+      if (Math.abs(tx - player.x) < 2.6) { e.side = -e.side; }
+      e.x += clamp(tx - e.x, -10 * dt, 10 * dt);
+      const close = Math.abs(e.z - zT) < 2.8 && Math.abs(e.x - tx) < 1.2;
+      if (close) { if (e.state !== 'shadow') { e.state = 'shadow'; e.t = 0; } if (e.t > e.wait) { e.state = 'warn'; e.t = 0; } }
+      else if (e.state === 'shadow') e.state = 'approach';
+    } else if (e.state === 'warn') {
+      // coge impulso hacia fuera y parpadea en rojo
+      e.x += clamp(tx + e.side * 0.8 - e.x, -6 * dt, 6 * dt);
+      e.chargeT = e.t;
+      if (Math.random() < 0.5) burst(e.x + rand(-0.8, 0.8), 0.1, e.z + 2, 2, { colors: [[1, 0.6, 0.2], [1, 0.9, 0.4]], speed: 4, up: 2, life: 0.2, size: 0.15, spread: 0.4, grav: 15 });
+      if (e.t > SPY.ENEMY_WARN_TIME) { e.state = 'ram'; e.t = 0; e.vx = -e.side * 26; AudioSys.sfx('nitro'); }
+    } else if (e.state === 'ram') {
+      e.x += e.vx * dt;
+      if (Math.random() < 0.7) burst(e.x, 0.5, e.z + 2, 3, { colors: [[1, 0.3, 0], [1, 0.6, 0.1], [1, 0.9, 0.3]], speed: 5, up: 2, life: 0.3, size: 0.35, spread: 0.3, grav: 3, vz: 6 });
+      if (e.t > 0.55 || Math.abs(e.x) > 8.5) { e.state = 'retreat'; e.t = 0; }
+    } else if (e.state === 'retreat') {
+      // se adelanta: es tu momento para dispararle
+      e.x += clamp(LANES[e.x < 0 ? 0 : 3] * 0.5 - e.x, -5 * dt, 5 * dt);
+      if (e.t > 2.4) { e.state = 'approach'; e.t = 0; e.side = spyPickSide(); e.wait = rand(0.4, 1); }
     }
-
-    if (e.charged) {
-      // Embestida activa — velocidad mucho mayor + persecución agresiva
-      e.z += (player.speed + e.chargeVelZ - e.speed) * dt;
-      // Steering agresivo hacia el jugador
-      const dx = e.chargeTargetX - e.x;
-      e.x += Math.sign(dx) * SPY.ENEMY_CHARGE_STEER * dt;
-      // Decelerar gradualmente el impulso extra
-      e.chargeVelZ *= Math.exp(-0.8 * dt);
-      // Estela de fuego del escape
-      if (Math.random() < 0.7) {
-        burst(e.x, 0.5, e.z + 2, 3, {
-          colors: [[1, 0.3, 0], [1, 0.6, 0.1], [1, 0.9, 0.3]], speed: 5, up: 2, life: 0.3, size: 0.35, spread: 0.3, grav: 3, vz: 6
-        });
-      }
-      // Si pasa de largo sin golpear, desactiva carga
-      if (e.z > 8) {
-        e.charged = false;
-        e.chargeVelZ = 0;
-        e.speed = rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX); // vuelve a velocidad normal
-      }
-    }
+    e.x = clamp(e.x, -8.5, 8.5);
+    e.charging = e.state === 'warn';
+    e.charged = e.state === 'ram';
 
     // Inclinar el modelo según movimiento (bank visual)
     const lateralVel = (player.x - e.x);
@@ -11413,7 +11410,7 @@ function spyUpdateGround(dt) {
     e.model.root.position.set(e.x, 0, e.z);
 
     // Fuera de rango
-    if (e.z > 40 || e.z < -400) {
+    if (e.z > 60 || e.z < -400) {
       scene.remove(e.model.root);
       spy.enemies.splice(i, 1);
       continue;
@@ -11423,13 +11420,13 @@ function spyUpdateGround(dt) {
     if (e.hitCd > 0) e.hitCd -= dt;
 
     // Colisión con jugador
-    if (e.hitCd <= 0 && Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
+    if (e.hitCd <= 0 && Math.abs(e.x - player.x) < 2.1 && Math.abs(e.z) < 3.6) {
       const wasCharging = e.charged;
-      const dmg = wasCharging ? Math.round(SPY.DMG_ENEMY * 1.5) : SPY.DMG_ENEMY;
+      const dmg = wasCharging ? Math.round(SPY.DMG_ENEMY * 1.3) : SPY.DMG_ENEMY;
       spyDamage(dmg);
       // Knockback al enemigo — más si estaba cargando
-      e.z = wasCharging ? -20 : -12;
-      e.speed = player.speed * 0.5;
+      e.x += Math.sign(e.x - player.x || e.side) * 2.5;
+      e.state = 'retreat'; e.t = 0;
       e.charged = false;
       e.charging = false;
       e.chargeVelZ = 0;
@@ -11460,7 +11457,8 @@ function spyUpdateGround(dt) {
         e.hp -= b.dmg;
         scene.remove(b.mesh);
         spy.bullets.splice(j, 1);
-        burst(e.x, 1, e.z, 8, { colors: [[1, 0.8, 0.3]], speed: 6, up: 4, life: 0.3, size: 0.3, spread: 0.3, grav: 8 });
+        burst(e.x, 1.2, e.z + 1.5, 14, { colors: [[1, 0.9, 0.4], [1, 0.5, 0.1], [1, 1, 1]], speed: 9, up: 5, life: 0.35, size: 0.55, spread: 0.4, grav: 8 });
+        e.flash = 0.12;
         // Las balas interrumpen la carga
         if (e.charging || e.charged) {
           e.charging = false;
@@ -11517,8 +11515,9 @@ function spyUpdateGround(dt) {
   // --- Update coches de pieza ---
   for (let i = spy.pieceCars.length - 1; i >= 0; i--) {
     const p = spy.pieceCars[i];
-    const dz = player.speed - p.speed;
-    p.z += dz * dt;
+    // lejos: se acerca deprisa; cerca: se deja alcanzar despacio
+    p.speed = player.speed - (p.z < -35 ? 28 : 5);
+    p.z += (player.speed - p.speed) * dt;
     p.model.root.position.set(p.x, 0, p.z);
 
     // Animación visual del coche de pieza
@@ -11533,21 +11532,29 @@ function spyUpdateGround(dt) {
     if (m.beacon) {
       m.beaconMat.opacity = 0.2 + Math.sin(simTime * 4) * 0.15;
     }
+    if (m.halo) {
+      const hp = 0.5 + 0.5 * Math.sin(simTime * 6);
+      m.haloMat.opacity = 0.25 + 0.35 * hp;
+      m.halo.scale.setScalar(0.9 + 0.2 * hp);
+      m.label.position.y = 4.2 + Math.sin(simTime * 3) * 0.25;
+    }
     if (m.pulse) {
       const pt = (simTime * 0.8) % 1;  // ciclo 0→1
-      const sc = 1 + pt * 3;
+      const sc = 1 + pt * 5;
       m.pulse.scale.set(sc, sc, 1);
       m.pulseMat.opacity = 0.5 * (1 - pt);
     }
 
     // Fuera de rango → reaparece más adelante
-    if (p.z > 60) {
-      p.z = SPAWN_Z;
+    if (p.z > 25) {
+      // te lo has pasado: vuelve a aparecer por delante
+      p.z = -140;
+      toast('↻ PIECE CAR IS BACK', SPY.PIECE_NAMES[p.pieceIndex], '#00f0ff');
       p.lane = randInt(0, 3);
       p.x = LANES[p.lane];
     }
     if (p.z < -400) {
-      p.z = SPAWN_Z;
+      p.z = -140;
       p.lane = randInt(0, 3);
       p.x = LANES[p.lane];
     }
@@ -12422,6 +12429,7 @@ function spyUpdate(dt) {
   }
 
   spyUpdateHUD();
+  spyPieceIndicator();
   document.body.classList.toggle('spy-cine', spy.phase === 'transform');
   document.body.classList.toggle('spy-air', spy.inAir);
 }
@@ -12491,7 +12499,7 @@ function spyFireGround(dt) {
     spy.gunCd = SPY.GUN_RATE;
     spy.gunSide = -(spy.gunSide || 1);
     spy.bullets.push(spawnBullet(player.x + spy.gunSide * 0.45, -3));
-    if (Math.random() < 0.6) burst(player.x + spy.gunSide * 0.45, 0.8, -2.6, 2, { colors: [[1, 0.85, 0.3]], speed: 2, up: 1, life: 0.12, size: 0.35, spread: 0.2, grav: 0 });
+    burst(player.x + spy.gunSide * 0.45, 1, -2.6, 3, { colors: [[1, 0.9, 0.4], [1, 0.6, 0.1]], speed: 3, up: 1, life: 0.1, size: 0.9, spread: 0.2, grav: 0, world: false });
   } else if (spy.weapon === 2) {
     spy.gunCd = 0.55;
     spy.bombProjs.push(spawnBomb(player.x, -4));
@@ -12649,7 +12657,49 @@ function spyCamera(dt) {
   pointScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
 }
 
+/* lado por el que se coloca un enemigo: donde haya hueco junto al jugador */
+function spyPickSide() {
+  if (player.x > 3.5) return -1;
+  if (player.x < -3.5) return 1;
+  const taken = spy.enemies.filter(e => e.state !== 'retreat').map(e => e.side);
+  if (taken.includes(1)) return -1;
+  if (taken.includes(-1)) return 1;
+  return Math.random() < 0.5 ? -1 : 1;
+}
+
+/* indicador en pantalla del coche de pieza (dónde está y a qué distancia) */
+let _spInd = null;
+function spyPieceIndicator() {
+  if (!_spInd) {
+    _spInd = document.createElement('div'); _spInd.id = 'spy-ind';
+    document.getElementById('hud').appendChild(_spInd);
+  }
+  const p = spy.phase === 'ground' ? spy.pieceCars[0] : null;
+  if (!p || (p.z > -32 && p.z < 12)) { _spInd.style.display = 'none'; return; }
+  const col = '#' + SPY.PIECE_COLORS[p.pieceIndex].toString(16).padStart(6, '0');
+  const ahead = p.z < 0;
+  _spInd.style.display = 'flex';
+  _spInd.style.top = ahead ? '92px' : 'auto';
+  _spInd.style.bottom = ahead ? 'auto' : '150px';
+  _spInd.style.left = clamp(50 + (p.x - player.x) * 3, 20, 80) + '%';
+  _spInd.style.borderColor = col; _spInd.style.color = col;
+  _spInd.textContent = (ahead ? '▲ ' : '▼ ') + ['🔫', '💣', '🚀', '✈️'][p.pieceIndex] + ' ' + SPY.PIECE_NAMES[p.pieceIndex] + ' · ' + Math.round(Math.abs(p.z)) + ' m';
+}
+
 /* ---------- envolturas (no-op fuera del modo Spy) ---------- */
+// sin túneles en Spy: desde la cámara cenital no se ve nada dentro
+const _spExtendZones = extendZones;
+extendZones = function () {
+  const n0 = Zones.list.length;
+  _spExtendZones();
+  if (spy.mode) for (let i = n0; i < Zones.list.length; i++) spyNoTunnel(Zones.list[i]);
+};
+function spyNoTunnel(Z) {
+  if (Z.type !== 'tunnel' || Z.objs) return;
+  Z.type = 'bridge';
+  Z.len = lerp(ZONE_LEN.bridge[0], ZONE_LEN.bridge[1], Math.random());
+  Z.end = Z.start + Z.len;
+}
 const _spUpdateCamera = updateCamera;
 updateCamera = function (dt) {
   _spUpdateCamera(dt);
@@ -12693,6 +12743,7 @@ function spyCleanup() {
   spyReset();
   spyShowHUD(false);
   document.body.classList.remove('spy-mode', 'spy-cine', 'spy-air');
+  if (_spInd) _spInd.style.display = 'none';
   if (playerModel) { playerModel.root.visible = true; playerModel.body.rotation.set(0, 0, 0); }
 }
 
@@ -12742,6 +12793,7 @@ startRun = function () {
     // sin policía, helicóptero, bifurcaciones ni controles: solo lo del modo Spy
     run.nextCop = run.nextHeli = run.nextFork = run.nextRB = 1e12;
     ghostPlay = null;
+    Zones.list.forEach(spyNoTunnel);
     document.body.classList.add('spy-mode');
   }
 };
@@ -12785,6 +12837,8 @@ body.spy-mode #heat, body.spy-mode .run-goal { display:none !important; }
 body.spy-cine #hud, body.spy-cine #touch { opacity:0; pointer-events:none; transition:opacity .3s; }
 body.spy-air #hud .speedo, body.spy-air #drive-coach, body.spy-air .combo { display:none !important; }
 @media (pointer:coarse) { .spy-key { display:none; } }
+#spy-ind { position:absolute; transform:translateX(-50%); display:none; align-items:center; gap:6px; padding:6px 12px; border:2px solid; border-radius:14px; background:rgba(8,10,30,.8); font-weight:800; font-size:13px; letter-spacing:.05em; z-index:12; pointer-events:none; animation:spyIndPulse .8s ease-in-out infinite alternate; white-space:nowrap; }
+@keyframes spyIndPulse { from { box-shadow:0 0 6px currentColor; } to { box-shadow:0 0 22px currentColor; } }
 `;
 
 // Inyectar CSS dinámicamente
@@ -13320,7 +13374,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = 'ce77e2f7';
+window.NS_BUILD = '71beeb9f';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
