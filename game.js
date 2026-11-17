@@ -10105,6 +10105,7 @@ const spy = {
   phase: 'off',         // off | ground | transform | air | boss | win | dead
   hp: SPY.HP_MAX,
   lastDmg: 0,          // tiempo desde último daño
+  iframes: 0,          // invulnerabilidad tras golpe (s)
   pieces: 0,           // 0-4 piezas recogidas
   weapon: 0,           // 0=nada, 1=gun, 2=+bombs, 3=+missiles
   score: 0,
@@ -11041,6 +11042,7 @@ function spyReset() {
   spy.phase = 'off';
   spy.hp = SPY.HP_MAX;
   spy.lastDmg = 0;
+  spy.iframes = 0;
   spy.pieces = 0;
   spy.weapon = 0;
   spy.score = 0;
@@ -11202,6 +11204,17 @@ function spyUpdateHUD() {
 function spyUpdateGround(dt) {
   const dist = run.dist;
 
+  // --- Iframes (invulnerabilidad) ---
+  if (spy.iframes > 0) {
+    spy.iframes -= dt;
+    // Parpadeo visual del coche cuando invulnerable
+    if (playerModel && playerModel.root) {
+      playerModel.root.visible = Math.sin(spy.iframes * 20) > 0;
+    }
+  } else if (playerModel && playerModel.root) {
+    playerModel.root.visible = true;
+  }
+
   // --- Regeneración ---
   spy.lastDmg += dt;
   if (spy.lastDmg > SPY.REGEN_DELAY && spy.hp < SPY.HP_MAX) {
@@ -11218,7 +11231,7 @@ function spyUpdateGround(dt) {
       model, lane, x: LANES[lane], z: SPAWN_Z,
       speed: rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX),
       hp: 3, charging: false, charged: false, chargeT: 0,
-      chargeVelZ: 0, chargeTargetX: 0
+      chargeVelZ: 0, chargeTargetX: 0, hitCd: 0
     };
     model.root.position.set(e.x, 0, e.z);
     spy.enemies.push(e);
@@ -11334,8 +11347,11 @@ function spyUpdateGround(dt) {
       continue;
     }
 
+    // Cooldown de colisión
+    if (e.hitCd > 0) e.hitCd -= dt;
+
     // Colisión con jugador
-    if (Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
+    if (e.hitCd <= 0 && Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
       const wasCharging = e.charged;
       const dmg = wasCharging ? Math.round(SPY.DMG_ENEMY * 1.5) : SPY.DMG_ENEMY;
       spyDamage(dmg);
@@ -11345,6 +11361,7 @@ function spyUpdateGround(dt) {
       e.charged = false;
       e.charging = false;
       e.chargeVelZ = 0;
+      e.hitCd = 2; // 2s sin poder volver a golpear
       flash(wasCharging ? '#ff0000' : '#ff3b5c');
       shake = wasCharging ? 1.2 : 0.6;
       AudioSys.sfx('crash');
@@ -11532,23 +11549,8 @@ function spyUpdateGround(dt) {
     }
   }
 
-  // --- Colisión balas con tráfico inocente ---
-  traffic.forEach(v => {
-    if (v.knock) return;
-    // Balas que golpean tráfico inocente
-    for (let j = spy.bullets.length - 1; j >= 0; j--) {
-      const b = spy.bullets[j];
-      if (Math.abs(b.x - v.x) < 1.5 && Math.abs(b.z - v.z) < 2.5) {
-        scene.remove(b.mesh);
-        spy.bullets.splice(j, 1);
-        // Eliminar inocente = penalización
-        spyDamage(SPY.DMG_KILL);
-        knockVehicle(v, Math.sign(b.x - v.x));
-        flash('#ff9a3d');
-        toast('⚠️ CIVILIAN HIT', '-' + SPY.DMG_KILL + ' HP', '#ff3b5c');
-      }
-    }
-  });
+  // --- Balas atraviesan tráfico inocente (sin penalización) ---
+  // Las balas solo impactan enemigos y coches de pieza, no civiles.
 
   // --- Colisión jugador con tráfico inocente ---
   traffic.forEach(v => {
@@ -11571,8 +11573,10 @@ function spyUpdateGround(dt) {
    ============================================================ */
 
 function spyDamage(amount) {
+  if (spy.iframes > 0) return; // invulnerable
   spy.hp -= amount;
   spy.lastDmg = 0;
+  spy.iframes = 1.2; // 1.2s de invulnerabilidad tras daño
   buzz([50, 30, 80]);
   if (spy.hp <= 0) {
     spy.hp = 0;
@@ -12963,7 +12967,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '561756d0';
+window.NS_BUILD = '2f416513';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
