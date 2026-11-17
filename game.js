@@ -6169,6 +6169,13 @@ function hitObstacle(o, z) {
     o.mesh.visible = false;
     return;
   }
+  // Spy Hunter mode: obstacles deal energy damage instead of instant crash
+  if (spy.mode && spy.phase === 'ground') {
+    spyDamage(SPY.DMG_TRAFFIC);
+    o.mesh.visible = false;
+    flash('#ffd23f'); shake = 0.3;
+    return;
+  }
   crash({ x: o.x, z, model: null }, dir);
 }
 // Lights for zones (glow points + wet reflections)
@@ -6542,6 +6549,8 @@ function nearMiss(v, gap) {
 }
 function hitVehicle(v) {
   if (player.invuln > 0) return;
+  // Spy Hunter mode: spy.js handles damage via energy bar, skip crash
+  if (spy.mode && spy.phase === 'ground') return;
   const dir = Math.sign(v.x - player.x) || pick([-1, 1]);
   if (player.shield) {
     player.shield = false; player.invuln = 1.2;
@@ -11736,7 +11745,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '3cfd3030';
+window.NS_BUILD = '1167f231';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
