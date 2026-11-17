@@ -10888,6 +10888,7 @@ function spyReset() {
   spy.gunCd = 0;
   spy.bombCd = 0;
   spy.transformT = 0;
+  cleanupTransformParts();
   spy.bossPhase = 1;
   spy.turretHP = [SPY.TURRET_HP, SPY.TURRET_HP];
   spy.coreHP = SPY.CORE_HP;
@@ -11311,35 +11312,286 @@ function spyDamage(amount) {
 }
 
 /* ============================================================
-   TRANSFORMACIÓN (suelo → aire)
+   TRANSFORMACIÓN ESTILO TRANSFORMERS (suelo → aire)
    ============================================================ */
+
+/* -- Piezas de transformación (se crean al iniciar la secuencia) -- */
+let _tfxParts = null;   // array de { mesh, startPos, startRot, startScale, endPos, endRot, endScale, phase }
+let _tfxFlash = null;   // mesh de flash blanco
+let _tfxTrail = null;   // estela de propulsión
+
+function buildTransformParts() {
+  if (_tfxParts) { _tfxParts.forEach(p => scene.remove(p.mesh)); }
+  _tfxParts = [];
+
+  // Materiales de la transformación
+  const carMat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
+  const neonMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const hotMat  = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const sparkMat = basic({ color: 0xffd23f, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+
+  // === PARTE 1: Carrocería central — se alarga y aplana ===
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 3.2), carMat);
+  _tfxParts.push({
+    mesh: chassis,
+    startPos: [0, 0.5, 0], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0, 0],     endRot: [0, 0, 0],   endScale: [1.2, 0.3, 1.5],
+    phase: [0.0, 0.5], // t normalizado inicio-fin
+  });
+
+  // === PARTE 2: Techo — se separa hacia arriba y se convierte en cabina ===
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.4, 1.8), carMat);
+  _tfxParts.push({
+    mesh: roof,
+    startPos: [0, 1.2, -0.3], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.4, -1.0],   endRot: [-0.2, 0, 0], endScale: [0.6, 0.6, 0.8],
+    phase: [0.1, 0.55],
+  });
+
+  // === PARTE 3 y 4: Puertas → se abren y giran hasta ser ALAS ===
+  for (let s = -1; s <= 1; s += 2) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 2.2), carMat);
+    _tfxParts.push({
+      mesh: door,
+      startPos: [s * 0.85, 0.7, 0],   startRot: [0, 0, 0], startScale: [1, 1, 1],
+      endPos: [s * 2.5, 0.1, 0.3],    endRot: [0, 0, s * -0.05], endScale: [0.6, 0.15, 1.3],
+      phase: [0.15, 0.6],
+    });
+  }
+
+  // === PARTE 5 y 6: Ruedas delanteras → se retraen y giran hacia dentro ===
+  for (let s = -1; s <= 1; s += 2) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
+    _tfxParts.push({
+      mesh: wh,
+      startPos: [s * 0.78, 0.36, -1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
+      endPos: [s * 0.3, 0.1, -1.8],     endRot: [Math.PI / 2, 0, 0],   endScale: [0.5, 0.5, 0.5],
+      phase: [0.05, 0.4],
+    });
+  }
+
+  // === PARTE 7 y 8: Ruedas traseras → se retraen ===
+  for (let s = -1; s <= 1; s += 2) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
+    _tfxParts.push({
+      mesh: wh,
+      startPos: [s * 0.78, 0.36, 1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
+      endPos: [s * 0.4, 0.05, 1.0],    endRot: [Math.PI / 2, 0, 0],   endScale: [0.4, 0.4, 0.4],
+      phase: [0.05, 0.35],
+    });
+  }
+
+  // === PARTE 9: Capó → se alarga hasta ser morro del avión ===
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.5, 1.5), carMat);
+  _tfxParts.push({
+    mesh: hood,
+    startPos: [0, 0.7, -1.8], startRot: [-0.1, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.15, -2.5],  endRot: [-0.05, 0, 0],  endScale: [0.6, 0.35, 1.8],
+    phase: [0.2, 0.6],
+  });
+
+  // === PARTE 10: Maletero → se convierte en cola ===
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.0), carMat);
+  _tfxParts.push({
+    mesh: trunk,
+    startPos: [0, 0.8, 1.5], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.3, 2.2],   endRot: [0, 0, 0],   endScale: [0.4, 0.8, 0.8],
+    phase: [0.2, 0.55],
+  });
+
+  // === PARTE 11 y 12: Alerones/estabilizadores verticales ===
+  for (let s = -1; s <= 1; s += 2) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.7), carMat);
+    _tfxParts.push({
+      mesh: fin,
+      startPos: [s * 0.5, 0.8, 1.5], startRot: [0, 0, s * 0.3], startScale: [0, 0, 0],
+      endPos: [s * 0.5, 0.6, 2.0],   endRot: [0, 0, s * 0.1],   endScale: [1, 1, 1],
+      phase: [0.4, 0.7],
+    });
+  }
+
+  // === Líneas neón que aparecen durante la transformación ===
+  for (let i = 0; i < 6; i++) {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, rand(1.5, 3.5)), neonMat);
+    _tfxParts.push({
+      mesh: line,
+      startPos: [rand(-1, 1), rand(0.2, 1.2), rand(-2, 2)], startRot: [0, rand(-0.5, 0.5), 0], startScale: [0, 0, 0],
+      endPos: [rand(-2.5, 2.5), rand(-0.1, 0.3), rand(-2, 2)], endRot: [0, 0, 0], endScale: [1, 1, 1],
+      phase: [0.3, 0.65],
+      fadeOut: true, // desaparecen al final
+    });
+  }
+
+  // Flash de energía
+  if (!_tfxFlash) {
+    _tfxFlash = new THREE.Mesh(
+      new THREE.SphereGeometry(6, 12, 8),
+      basic({ color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide })
+    );
+    scene.add(_tfxFlash);
+  }
+  _tfxFlash.visible = false;
+
+  // Añadir todas las piezas a la escena (ocultas)
+  _tfxParts.forEach(p => { p.mesh.visible = false; scene.add(p.mesh); });
+}
+
+function cleanupTransformParts() {
+  if (_tfxParts) {
+    _tfxParts.forEach(p => scene.remove(p.mesh));
+    _tfxParts = null;
+  }
+  if (_tfxFlash) _tfxFlash.visible = false;
+}
 
 function spyUpdateTransform(dt) {
   spy.transformT += dt;
   const t = spy.transformT;
-  const dur = 3.5; // duración total de la transformación
+  const dur = 4.5; // duración total de la transformación
+
+  const px = player.x; // posición X del jugador
+
+  // Inicializar piezas en el primer frame
+  if (t < dt * 2 && !_tfxParts) {
+    buildTransformParts();
+    // Ocultar el coche del jugador
+    if (playerModel) playerModel.root.visible = false;
+  }
 
   if (t < dur) {
-    // Fase 1: coche acelera y se levanta
-    const lift = clamp(t / dur, 0, 1);
-    const h = lift * lift * SPY.AIR_Y;
-    // Mover la cámara gradualmente hacia arriba y atrás
-    camera.position.y = lerp(4.5, SPY.AIR_Y + 20, smooth(0, 1, lift));
-    camera.position.z = lerp(10.5, 5, smooth(0, 1, lift));
-    camera.lookAt(player.x, h, -10);
+    const p = t / dur; // progreso normalizado 0→1
 
-    // Ocultar el coche del jugador gradualmente
-    if (t > dur * 0.4) {
-      // Mostrar el avión
-      spy.plane.root.visible = true;
-      spy.plane.root.position.set(player.x, h, -2);
-      spy.plane.root.rotation.set(0, 0, 0);
-      spy.plane.body.rotation.z = Math.sin(t * 2) * 0.1;
+    /* ======== FASE 0: Flash inicial + shake (0-0.3s) ======== */
+    if (t < 0.3) {
+      const flashP = t / 0.3;
+      if (_tfxFlash) {
+        _tfxFlash.visible = true;
+        _tfxFlash.position.set(px, 1, 0);
+        _tfxFlash.material.opacity = Math.sin(flashP * Math.PI) * 0.6;
+        _tfxFlash.scale.setScalar(1 + flashP * 2);
+      }
+      // Camera shake
+      camera.position.x += Math.sin(t * 80) * 0.15 * (1 - flashP);
+      camera.position.y = 4.5 + Math.sin(t * 60) * 0.1 * (1 - flashP);
+      camera.position.z = 10.5;
+      camera.lookAt(px, 1, -5);
+
+      // Chispas de energía
+      if (Math.random() < 0.6) {
+        burst(px + rand(-1, 1), rand(0.5, 2), rand(-2, 2), 3, {
+          colors: [[0, 0.94, 1], [1, 0.17, 0.84]], speed: 8, up: 5, life: 0.4, size: 0.25, spread: 0.3, grav: 5
+        });
+      }
+    } else if (_tfxFlash) {
+      _tfxFlash.material.opacity *= 0.9;
+      if (_tfxFlash.material.opacity < 0.01) _tfxFlash.visible = false;
     }
+
+    /* ======== FASES 1-3: Transformación de piezas ======== */
+    const liftProgress = smooth(0.1, 0.9, p);
+    const height = liftProgress * liftProgress * 12; // se eleva cuadráticamente
+
+    if (_tfxParts) {
+      _tfxParts.forEach(part => {
+        const [t0, t1] = part.phase;
+        const pp = clamp((p - t0) / (t1 - t0), 0, 1);
+        const sp = pp * pp * (3 - 2 * pp); // smoothstep
+
+        // Interpolar posición, rotación, escala
+        const mx = lerp(part.startPos[0], part.endPos[0], sp) + px;
+        const my = lerp(part.startPos[1], part.endPos[1], sp) + height;
+        const mz = lerp(part.startPos[2], part.endPos[2], sp);
+        part.mesh.position.set(mx, my, mz);
+        part.mesh.rotation.set(
+          lerp(part.startRot[0], part.endRot[0], sp),
+          lerp(part.startRot[1], part.endRot[1], sp),
+          lerp(part.startRot[2], part.endRot[2], sp),
+        );
+        part.mesh.scale.set(
+          lerp(part.startScale[0], part.endScale[0], sp),
+          lerp(part.startScale[1], part.endScale[1], sp),
+          lerp(part.startScale[2], part.endScale[2], sp),
+        );
+
+        part.mesh.visible = pp > 0;
+
+        // Fade out para líneas neón
+        if (part.fadeOut && pp > 0.8) {
+          part.mesh.material.opacity = (1 - (pp - 0.8) / 0.2) * 0.9;
+        }
+      });
+    }
+
+    // Partículas de chispas mecánicas durante la transformación
+    if (p > 0.1 && p < 0.7 && Math.random() < 0.4) {
+      burst(px + rand(-1.5, 1.5), height + rand(-0.5, 1), rand(-2, 2), 2, {
+        colors: [[1, 0.82, 0.24], [1, 0.5, 0.1]], speed: 6, up: 3, life: 0.5, size: 0.15, spread: 0.4, grav: 12
+      });
+    }
+
+    // Partículas neón cian/magenta en el centro
+    if (p > 0.2 && p < 0.6 && Math.random() < 0.3) {
+      burst(px, height + 0.5, 0, 4, {
+        colors: [[0, 0.94, 1], [1, 0.17, 0.84], [0.5, 0.5, 1]],
+        speed: 4, up: 6, life: 0.6, size: 0.3, spread: 1.5, grav: 3
+      });
+    }
+
+    /* ======== FASE 4: Aparece el avión real (p > 0.6) ======== */
+    if (p > 0.6) {
+      const planeP = smooth(0.6, 0.85, p);
+      spy.plane.root.visible = true;
+      spy.plane.root.position.set(px, height, -2);
+      spy.plane.root.rotation.set(0, 0, 0);
+      spy.plane.body.rotation.z = Math.sin(t * 3) * 0.08;
+
+      // Escalar el avión de 0 a 1
+      const sc = planeP;
+      spy.plane.root.scale.set(sc, sc, sc);
+
+      // Ocultar piezas de transformación gradualmente
+      if (_tfxParts) {
+        _tfxParts.forEach(part => {
+          if (planeP > 0.3) {
+            part.mesh.material.transparent = true;
+            part.mesh.material.opacity = Math.max(0, 1 - (planeP - 0.3) / 0.7);
+          }
+        });
+      }
+
+      // Partículas de thruster
+      if (planeP > 0.5 && Math.random() < 0.5) {
+        burst(px, height - 0.3, 1.5, 5, {
+          colors: [[0, 0.94, 1], [0.5, 0.8, 1]], speed: 10, up: -2, life: 0.3, size: 0.3, spread: 0.3, grav: 0, vz: 8
+        });
+      }
+    }
+
+    /* ======== Cámara cinematográfica ======== */
+    // Órbita suave alrededor de la transformación
+    const camAngle = p * Math.PI * 0.6; // rota ~108 grados
+    const camDist = lerp(8, 14, smooth(0, 1, p));
+    const camH = lerp(3, height + 10, smooth(0.2, 0.8, p));
+    const camTargetH = lerp(1, height, smooth(0.1, 0.7, p));
+
+    camera.position.set(
+      px + Math.sin(camAngle) * camDist,
+      camH,
+      Math.cos(camAngle) * camDist
+    );
+    camera.lookAt(px, camTargetH, 0);
+
   } else {
-    // Transformación completa → fase aérea
+    /* ======== Transformación completa → fase aérea ======== */
+    cleanupTransformParts();
+
+    // Restaurar escala del avión
+    spy.plane.root.scale.set(1, 1, 1);
     spy.phase = 'air';
-    spy.planeX = player.x;
+    spy.planeX = px;
     spy.planeZ = -20;
     spy.plane.root.visible = true;
     spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
@@ -11354,6 +11606,9 @@ function spyUpdateTransform(dt) {
     spy.bullets = [];
     spy.bombProjs.forEach(b => scene.remove(b.mesh));
     spy.bombProjs = [];
+
+    // Restaurar coche del jugador (oculto pero listo)
+    if (playerModel) playerModel.root.visible = false;
 
     // Preparar jefe
     spy.boss.root.visible = true;
@@ -12224,7 +12479,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = 'ea48afbb';
+window.NS_BUILD = '635844a4';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
