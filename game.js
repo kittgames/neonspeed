@@ -10200,6 +10200,25 @@ function parseGLB(buffer) {
 
   const group = new THREE.Group();
   const defaultMat = std({ color: 0x888888, metalness: 0.5, roughness: 0.5 });
+  // texturas embebidas (glTF: imagen en un bufferView); se cargan en segundo plano
+  const texCache = {};
+  function glbTexture(texIdx, srgb) {
+    if (texCache[texIdx]) return texCache[texIdx];
+    const tdef = gltf.textures && gltf.textures[texIdx];
+    const img = tdef && gltf.images[tdef.source];
+    if (!img || img.bufferView === undefined) return null;
+    const bv = gltf.bufferViews[img.bufferView];
+    const blob = new Blob([new Uint8Array(bin, bv.byteOffset || 0, bv.byteLength)], { type: img.mimeType || 'image/jpeg' });
+    const tex = new THREE.Texture();
+    tex.flipY = false;
+    if (srgb) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const el = new Image();
+    el.onload = () => { tex.image = el; tex.needsUpdate = true; };
+    el.src = URL.createObjectURL(blob);
+    texCache[texIdx] = tex;
+    return tex;
+  }
 
   (gltf.meshes || []).forEach(mesh => {
     mesh.primitives.forEach(prim => {
@@ -10238,14 +10257,17 @@ function parseGLB(buffer) {
         const gMat = gltf.materials[prim.material];
         const pbr = gMat && gMat.pbrMetallicRoughness;
         if (pbr) {
-          const bc = pbr.baseColorFactor || [0.8, 0.8, 0.8, 1];
+          const bc = pbr.baseColorFactor || [1, 1, 1, 1];
+          const map = pbr.baseColorTexture ? glbTexture(pbr.baseColorTexture.index, true) : null;
           mat = std({
             color: new THREE.Color(bc[0], bc[1], bc[2]),
-            metalness: pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.5,
-            roughness: pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.5,
+            map,
+            metalness: pbr.metallicRoughnessTexture ? 0.45 : (pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.5),
+            roughness: pbr.metallicRoughnessTexture ? 0.45 : (pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.5),
             transparent: bc[3] < 1,
             opacity: bc[3],
           });
+          if (map) { mat.emissive = new THREE.Color(0xffffff); mat.emissiveMap = map; mat.emissiveIntensity = 0.18; }
           if (gMat.doubleSided) mat.side = THREE.DoubleSide;
         }
       }
@@ -10547,28 +10569,28 @@ function buildPlane() {
     /* === Usar modelo GLB === */
     const model = _glbPlane.clone();
     // Escalar y orientar el modelo para que encaje con el gameplay
-    model.scale.set(2.5, 2.5, 2.5);
-    model.rotation.y = Math.PI; // apuntar hacia -Z (dirección de vuelo)
+    model.scale.set(3, 3, 3);
+    model.rotation.y = Math.PI / 2; // el morro del modelo está en +X → girarlo hacia -Z (dirección de vuelo)
     body.add(model);
 
     // Crear grupos de thruster sintéticos para las llamas
     const glowMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7,
       blending: THREE.AdditiveBlending, depthWrite: false });
-    const flameGeo = new THREE.ConeGeometry(0.25, 1.4, 6);
+    const flameGeo = new THREE.ConeGeometry(0.2, 1.1, 6);
     flameGeo.rotateX(Math.PI / 2);
 
     const thrL = new THREE.Group();
     const flameL = new THREE.Mesh(flameGeo, glowMat);
     flameL.position.z = 0.6;
     thrL.add(flameL);
-    thrL.position.set(-0.5, -0.08, 2.3);
+    thrL.position.set(-0.3, 0, 1.35);
     body.add(thrL);
 
     const thrR = new THREE.Group();
     const flameR = new THREE.Mesh(flameGeo.clone(), glowMat);
     flameR.position.z = 0.6;
     thrR.add(flameR);
-    thrR.position.set(0.5, -0.08, 2.3);
+    thrR.position.set(0.3, 0, 1.35);
     body.add(thrR);
 
     // Halo sutil debajo
@@ -10741,68 +10763,131 @@ function buildPlane() {
   return { root, body, thrL, thrR };
 }
 
+/* --- Nave nodriza: fortaleza volante oscura con luces rojas (vista desde arriba) --- */
+function buildBossV2() {
+  const root = new THREE.Group();
+  const hullG = new THREE.Group(); root.add(hullG);
+  const gm = std({ color: 0x0c0e12, metalness: 0.1, roughness: 0.9 });
+  const gm2 = std({ color: 0x0a0c10, metalness: 0.1, roughness: 0.85 });
+  const gm3 = std({ color: 0x0b0c10, metalness: 0.1, roughness: 0.9 });
+  const red = basic({ color: 0xe0140a });
+  const redGlow = basic({ color: 0xff2414 });
+  const engGlow = basic({ color: 0xff7a20, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1, parent = hullG) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.scale.set(sx, sy, sz); parent.add(m); return m;
+  };
+  // casco principal hexagonal alargado
+  const hullMesh = add(new THREE.CylinderGeometry(8, 8.6, 2.2, 6), gm, 0, 0, -1, 0, Math.PI / 6, 0, 1, 1, 1.45);
+  // cubierta superior escalonada
+  add(new THREE.CylinderGeometry(5.6, 6.4, 1.0, 6), gm2, 0, 1.5, -2, 0, Math.PI / 6, 0, 1, 1, 1.4);
+  add(new THREE.CylinderGeometry(3.2, 3.8, 1.2, 6), gm3, 0, 2.4, -6.5, 0, Math.PI / 6, 0, 1, 1, 1.3);
+  // proa en punta hacia el jugador (+Z)
+  add(new THREE.CylinderGeometry(5.2, 5.2, 1.8, 3), gm, 0, -0.1, 9.2, 0, Math.PI, 0, 1, 1, 1.25);
+  add(new THREE.BoxGeometry(0.35, 0.25, 9), red, 0, 1.05, 8.5, 0, 0, 0);
+  // alas laterales en flecha con borde rojo
+  for (const s of [-1, 1]) {
+    add(new THREE.BoxGeometry(9, 0.6, 7), gm2, s * 11, -0.3, -3, 0, s * 0.35, 0);
+    add(new THREE.BoxGeometry(9.4, 0.3, 0.45), red, s * 11.5, 0.05, 0.2, 0, s * 0.35, 0);
+    add(new THREE.BoxGeometry(1.2, 1.4, 6), gm3, s * 15.2, 0.1, -4.4, 0, s * 0.35, 0);
+    // luces de posición
+    add(new THREE.SphereGeometry(0.45, 8, 6), redGlow, s * 16, 0.9, -1.8);
+    add(new THREE.SphereGeometry(0.4, 8, 6), redGlow, s * 7.6, 1.3, 7);
+    // filas de ventanas rojas a lo largo del casco
+    for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.5, 0.15, 0.9), red, s * 4.9, 2.05, -7 + k * 2.2);
+  }
+  // motores en la popa (-Z)
+  const engines = [];
+  for (const x of [-5.2, -1.8, 1.8, 5.2]) {
+    add(new THREE.CylinderGeometry(1.1, 1.3, 2.4, 10), gm3, x, -0.2, -13.6, Math.PI / 2, 0, 0);
+    const fl = add(new THREE.ConeGeometry(0.95, 3.2, 10), engGlow, x, -0.2, -16.2, -Math.PI / 2, 0, 0);
+    engines.push(fl);
+  }
+  // placas y antenas para dar detalle
+  for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(10.5 - k * 1.2, 0.08, 0.18), gm3, 0, 2.03, 3 - k * 2.6);
+  add(new THREE.CylinderGeometry(0.08, 0.08, 3, 6), gm2, 1.6, 4.1, -7.5);
+  add(new THREE.SphereGeometry(0.25, 8, 6), redGlow, 1.6, 5.7, -7.5);
+
+  const TOP = 2.0;
+  const dark = std({ color: 0x14161c, metalness: 0.1, roughness: 0.85 });
+  const gun = std({ color: 0x0e1014, metalness: 0.2, roughness: 0.7 });
+  const turrets = [];
+  for (const s of [-1, 1]) {
+    // torreta sobre la cubierta, donde la busca el combate (x = ±6)
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.8, 0.9, 12), dark);
+    tBase.position.set(s * 6, TOP + 0.4, 1);
+    root.add(tBase);
+    const barrel = new THREE.Group();
+    barrel.position.set(s * 6, TOP + 1.1, 1);
+    barrel.add(new THREE.Mesh(new THREE.BoxGeometry(2.3, 1, 2.2), gun));
+    const bGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.4, 8); bGeo.rotateX(Math.PI / 2);
+    for (const dx of [-0.5, 0.5]) {
+      const b = new THREE.Mesh(bGeo, gun); b.position.set(dx, 0, 2.5); barrel.add(b);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), redGlow); tip.position.set(dx, 0, 4.2); barrel.add(tip);
+    }
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.38, 8, 6), redGlow); eye.position.set(0, 0.55, 0.7); barrel.add(eye);
+    root.add(barrel);
+    turrets.push({ base: tBase, barrel, side: s, alive: true });
+  }
+  // núcleo rojo en el centro de la cubierta, protegido por un escudo hasta que caen las torretas
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.7, 16, 12),
+    basic({ color: 0xff3a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.position.set(0, TOP + 0.7, -1.5);
+  root.add(core);
+  const armor = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    std({ color: 0x0d3a55, metalness: 0.3, roughness: 0.1, transparent: true, opacity: 0.55, emissive: 0x1aa0ff, emissiveIntensity: 0.35 }));
+  armor.position.set(0, TOP, -1.5);
+  root.add(armor);
+
+  root.userData.engines = engines;
+  root.visible = false;
+  scene.add(root);
+  return { root, turrets, core, armor, hullMesh, engines };
+}
+
 /* --- Nave nodriza steampunk (Dreadnought) --- */
 function buildBoss() {
   const root = new THREE.Group();
 
   if (_glbBoss) {
-    /* === Usar modelo GLB === */
+    /* === Modelo GLB a escala de jefe (≈16 m de ancho) con torretas y núcleo encima === */
     const model = _glbBoss.clone();
-    // Escalar el dreadnought para que sea imponente
-    model.scale.set(4, 4, 4);
-    model.rotation.y = Math.PI; // proa hacia +Z
+    model.scale.set(16, 16, 16);
+    model.rotation.y = Math.PI; // proa hacia el jugador (+Z)
     root.add(model);
+    const hullMesh = model.children[0] || model;
+    const TOP = 1.5; // cubierta (el casco mide ~3 m de alto)
 
-    // hullMesh — referencia al primer mesh grande del modelo
-    let hullMesh = model.children[0] || model;
-
-    // Torretas sintéticas — necesarias para la lógica de combate
-    const dark = std({ color: 0x1a1210, metalness: 0.4, roughness: 0.7 });
-    const copper = std({ color: 0xb87333, metalness: 0.85, roughness: 0.25 });
-    const iron = std({ color: 0x555555, metalness: 0.7, roughness: 0.4 });
-    const orangeGlow = basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    const dark = std({ color: 0x1a1d24, metalness: 0.7, roughness: 0.35 });
+    const gun = std({ color: 0x3a3f4a, metalness: 0.85, roughness: 0.3 });
+    const redGlow = basic({ color: 0xff3020, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     const turrets = [];
     for (let s = -1; s <= 1; s += 2) {
-      const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.5, 1.2, 10), dark);
-      tBase.position.set(s * 6.5, -1.5, 1);
+      // torreta sobre la cubierta, en la misma posición que usa el combate (x = ±6)
+      const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.7, 0.9, 12), dark);
+      tBase.position.set(s * 6, TOP + 0.45, 1);
       root.add(tBase);
-      const shield = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 1.8), iron);
-      shield.position.set(s * 6.5, -1, 1.8);
-      root.add(shield);
-      const barrelGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.5, 6);
-      barrelGeo.rotateX(Math.PI / 2);
-      const barrel1 = new THREE.Mesh(barrelGeo, copper);
-      barrel1.position.set(s * 6.5 + s * 0.4, -1, 3.3);
-      root.add(barrel1);
-      const barrel2 = new THREE.Mesh(barrelGeo.clone(), copper);
-      barrel2.position.set(s * 6.5 - s * 0.4, -1, 3.3);
-      root.add(barrel2);
-      const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), orangeGlow);
-      muzzle.position.set(s * 6.5, -1, 5.0);
-      root.add(muzzle);
       const barrel = new THREE.Group();
-      barrel.add(barrel1); barrel.add(barrel2); barrel.add(muzzle); barrel.add(shield);
+      barrel.position.set(s * 6, TOP + 1.1, 1);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 2), gun);
+      barrel.add(head);
+      const bGeo = new THREE.CylinderGeometry(0.2, 0.2, 3.2, 8); bGeo.rotateX(Math.PI / 2);
+      for (const dx of [-0.45, 0.45]) {
+        const b = new THREE.Mesh(bGeo, gun); b.position.set(dx, 0, 2.3); barrel.add(b);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), redGlow); tip.position.set(dx, 0, 3.9); barrel.add(tip);
+      }
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), redGlow); eye.position.set(0, 0.5, 0.6); barrel.add(eye);
       root.add(barrel);
       turrets.push({ base: tBase, barrel, side: s, alive: true });
     }
-
-    // Núcleo de energía
-    const coreGlow = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
-    const core = new THREE.Mesh(new THREE.SphereGeometry(2.0, 14, 10), coreGlow);
-    core.position.set(0, -2.8, 0);
+    // núcleo rojo en el centro de la cubierta…
+    const coreGlow = basic({ color: 0xff3a2a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(1.6, 16, 12), coreGlow);
+    core.position.set(0, TOP + 0.6, 0);
     root.add(core);
-
-    // Armor plate
-    const hull_m = std({ color: 0x3a2a1a, metalness: 0.65, roughness: 0.45 });
-    const armorGeo = new THREE.BoxGeometry(7, 1.5, 5.5, 2, 1, 2);
-    const ap = armorGeo.attributes.position;
-    for (let i = 0; i < ap.count; i++) {
-      const y = ap.getY(i);
-      ap.setY(i, y - 0.3 * Math.abs(ap.getX(i)) / 3.5);
-    }
-    armorGeo.computeVertexNormals();
-    const armor = new THREE.Mesh(armorGeo, hull_m);
-    armor.position.set(0, -2.2, 0);
+    // …protegido por un escudo de energía hasta que caen las dos torretas
+    const armor = new THREE.Mesh(new THREE.SphereGeometry(2.8, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      basic({ color: 0x40d0ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+    armor.position.set(0, TOP, 0);
     root.add(armor);
 
     root.visible = false;
@@ -11051,7 +11136,7 @@ const _bombGeo = new THREE.SphereGeometry(0.55, 10, 8);
 const _bombMat = basic({ color: 0xff6b2b, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
 const _missileGeo = new THREE.CylinderGeometry(0.2, 0.2, 2, 6);
 _missileGeo.rotateX(Math.PI / 2);
-const _missileMat = basic({ color: 0xff2bd6, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+const _missileMat = basic({ color: 0xff2bd6 });
 
 function spawnBullet(x, z) {
   const mesh = new THREE.Mesh(_bulletGeo, _bulletMat);
@@ -11085,8 +11170,8 @@ function spawnMissile(x, z, targetX, targetZ) {
 // Indicadores de ataque (marcadores en el suelo/aire)
 const _warnGeo = new THREE.PlaneGeometry(1, 1);
 _warnGeo.rotateX(-Math.PI / 2);
-const _warnMatBeam = basic({ color: 0xff4444, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
-const _warnMatArea = basic({ color: 0xffaa22, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+const _warnMatBeam = basic({ color: 0xff1a1a, transparent: true, opacity: 0.5, depthWrite: false });
+const _warnMatArea = basic({ color: 0xff7a00, transparent: true, opacity: 0.4, depthWrite: false });
 
 function bossBeamAttack() {
   // Rayo que barre una franja horizontal
@@ -11184,7 +11269,7 @@ function spyStart() {
 
   // Construir modelos que necesitemos (lazy)
   if (!spy.plane) spy.plane = buildPlane();
-  if (!spy.boss) spy.boss = buildBoss();
+  if (!spy.boss) spy.boss = buildBossV2();
 
   // HUD
   spyShowHUD(true);
@@ -12576,9 +12661,8 @@ function _spBuildAir() {
     grp.add(q); puffs.push(q);
   }
   // luz propia para que el avión se vea siempre de día
-  const sunL = new THREE.DirectionalLight(0xfff4e0, 0.9); sunL.position.set(30, 120, 40);
-  const skyL = new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.5);
-  grp.add(sunL); grp.add(sunL.target); grp.add(skyL);
+  const skyL = new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25);
+  grp.add(skyL);
   return { grp, t1, t2, puffs };
 }
 function _spKeep(o) {
@@ -12623,6 +12707,7 @@ function spyAirTick(dt) {
     if (q.position.z > 60) { q.position.z = rand(-340, -280); q.position.x = rand(-120, 120); }
   });
   scene.fog.color.setHex(0xbfdcf5); scene.fog.near = 200; scene.fog.far = 700;
+  if (spy.boss && spy.boss.engines && spy.boss.root.visible) spy.boss.engines.forEach((f, i) => { const k = 0.85 + 0.25 * Math.sin(simTime * 22 + i * 1.7); f.scale.set(1, k, 1); });
 }
 
 /* --- cámara: cenital en suelo, cinemática en la transformación,
@@ -12849,7 +12934,7 @@ body.spy-air #hud .speedo, body.spy-air #drive-coach, body.spy-air .combo { disp
 })();
 
 window.NSSpy = { spy, actions, camera, race, run: () => run, get state() { return state; }, get playerModel() { return playerModel; },
-  beginTransform: spyBeginTransform, equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v) };
+  beginTransform: spyBeginTransform, equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
@@ -13374,7 +13459,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '71beeb9f';
+window.NS_BUILD = '398af9e2';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
