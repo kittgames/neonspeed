@@ -10169,146 +10169,383 @@ function buildPlane() {
   const body = new THREE.Group();
   root.add(body);
 
-  const mat = std({ color: 0x1a2a4a, metalness: 0.7, roughness: 0.3 });
-  const glow = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
-  const red = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+  /* --- Materiales --- */
+  const mat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
+  const matL = std({ color: 0x14243d, metalness: 0.75, roughness: 0.25 });
+  const acc  = std({ color: 0x2a4a6a, metalness: 0.9, roughness: 0.15 });
+  const glow = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const glowH = basic({ color: 0x00f0ff, transparent: true, opacity: 0.35,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const pink = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const cabin = std({ color: 0x061018, metalness: 0.95, roughness: 0.05,
+    transparent: true, opacity: 0.85 });
 
-  // Fuselaje
-  const fuse = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 5), mat);
-  body.add(fuse);
+  /* --- Fuselaje principal (perfil aerodinámico) --- */
+  const fuseGeo = new THREE.BoxGeometry(1.4, 0.55, 5.6, 2, 1, 3);
+  const fp = fuseGeo.attributes.position;
+  for (let i = 0; i < fp.count; i++) {
+    const z = fp.getZ(i);
+    // Estrechamiento hacia nariz y cola
+    const t = (z + 2.8) / 5.6;
+    const taper = 1 - 0.5 * Math.pow(Math.abs(t - 0.55) / 0.55, 2.2);
+    fp.setX(i, fp.getX(i) * Math.max(0.35, taper));
+    fp.setY(i, fp.getY(i) * Math.max(0.5, taper));
+  }
+  fuseGeo.computeVertexNormals();
+  body.add(new THREE.Mesh(fuseGeo, mat));
 
-  // Cabina
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.8), std({ color: 0x0d1626, metalness: 0.9, roughness: 0.08, transparent: true, opacity: 0.8 }));
-  cab.position.set(0, 0.4, 0.5);
-  body.add(cab);
+  // Lomo superior (cresta aerodinámica)
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 3.2), acc);
+  spine.position.set(0, 0.32, -0.2);
+  body.add(spine);
 
-  // Alas
-  const wingGeo = new THREE.BoxGeometry(8, 0.12, 2.2);
-  const wingL = new THREE.Mesh(wingGeo, mat);
-  wingL.position.set(0, 0, -0.3);
-  body.add(wingL);
+  /* --- Cabina burbuja --- */
+  const cabGeo = new THREE.SphereGeometry(0.6, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+  const cabMesh = new THREE.Mesh(cabGeo, cabin);
+  cabMesh.scale.set(1.1, 0.7, 1.6);
+  cabMesh.position.set(0, 0.28, 0.9);
+  body.add(cabMesh);
+  // Marco de cabina
+  const cabFrame = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.04, 6, 12), acc);
+  cabFrame.scale.set(1.1, 0.7, 1.6);
+  cabFrame.position.set(0, 0.28, 0.9);
+  cabFrame.rotation.x = Math.PI / 2;
+  body.add(cabFrame);
 
-  // Alerones punta de ala
-  const tipGeo = new THREE.BoxGeometry(0.3, 0.8, 0.8);
-  const tipL = new THREE.Mesh(tipGeo, mat);
-  tipL.position.set(-4, 0.3, -0.3);
-  body.add(tipL);
-  const tipR = new THREE.Mesh(tipGeo, mat);
-  tipR.position.set(4, 0.3, -0.3);
-  body.add(tipR);
+  /* --- Alas delta con sweep --- */
+  for (let side = -1; side <= 1; side += 2) {
+    // Ala principal (angled)
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.08, 2.4), mat);
+    wing.position.set(side * 2.4, -0.02, -0.5);
+    wing.rotation.y = side * -0.08;
+    body.add(wing);
 
-  // Estabilizador trasero
-  const tailGeo = new THREE.BoxGeometry(3, 0.1, 1);
-  const tail = new THREE.Mesh(tailGeo, mat);
-  tail.position.set(0, 0, -2.2);
-  body.add(tail);
-  const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 1.2), mat);
-  vTail.position.set(0, 0.5, -2.2);
-  body.add(vTail);
+    // Borde de ataque (edge strip glow)
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.03, 0.06), glow);
+    edge.position.set(side * 2.4, 0.02, 0.7);
+    edge.rotation.y = side * -0.08;
+    body.add(edge);
 
-  // Propulsores neón
-  const thrustGeo = new THREE.CylinderGeometry(0.25, 0.4, 0.8, 8);
-  thrustGeo.rotateX(Math.PI / 2);
-  const thrL = new THREE.Mesh(thrustGeo, glow);
-  thrL.position.set(-0.5, -0.1, -2.6);
+    // Winglet (punta de ala curvada hacia arriba)
+    const wlet = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.7), matL);
+    wlet.position.set(side * 4.2, 0.35, -0.6);
+    wlet.rotation.z = side * -0.25;
+    body.add(wlet);
+
+    // Línea neón en winglet
+    const wGlow = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.7, 0.08), glow);
+    wGlow.position.set(side * 4.35, 0.4, -0.3);
+    body.add(wGlow);
+
+    // Canard (ala frontal pequeña)
+    const canard = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.05, 0.6), matL);
+    canard.position.set(side * 1.0, 0.1, 2.0);
+    canard.rotation.y = side * -0.12;
+    body.add(canard);
+
+    // Pilón bajo ala (soporte de misil)
+    const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.6), acc);
+    pylon.position.set(side * 2.5, -0.18, -0.3);
+    body.add(pylon);
+
+    // Lanzamisiles
+    const misGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.4, 6);
+    misGeo.rotateX(Math.PI / 2);
+    const mis = new THREE.Mesh(misGeo, pink);
+    mis.position.set(side * 2.5, -0.32, -0.3);
+    body.add(mis);
+
+    // Intake de aire (toma lateral)
+    const intake = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.3, 1.0), acc);
+    intake.position.set(side * 0.65, -0.2, -0.5);
+    body.add(intake);
+    const intakeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.1), glow);
+    intakeGlow.position.set(side * 0.65, -0.2, 0.0);
+    body.add(intakeGlow);
+  }
+
+  /* --- Cola doble (twin tail) --- */
+  for (let side = -1; side <= 1; side += 2) {
+    // Plano horizontal
+    const hTail = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.9), mat);
+    hTail.position.set(side * 1.0, 0.05, -2.6);
+    body.add(hTail);
+
+    // Plano vertical (timón)
+    const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.0, 0.9), matL);
+    vTail.position.set(side * 1.0, 0.5, -2.6);
+    vTail.rotation.z = side * 0.12;
+    body.add(vTail);
+
+    // Neon stripe en timón
+    const tStripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.6, 0.06), glow);
+    tStripe.position.set(side * 1.03, 0.55, -2.3);
+    body.add(tStripe);
+  }
+
+  /* --- Propulsores (toberas con afterburner) --- */
+  const thrustHousing = new THREE.CylinderGeometry(0.35, 0.28, 0.5, 8);
+  thrustHousing.rotateX(Math.PI / 2);
+  const flameGeo = new THREE.ConeGeometry(0.28, 1.2, 8);
+  flameGeo.rotateX(-Math.PI / 2);
+
+  const thrL = new THREE.Group();
+  thrL.add(new THREE.Mesh(thrustHousing, acc));
+  const flameL = new THREE.Mesh(flameGeo, glow);
+  flameL.position.z = -0.8;
+  thrL.add(flameL);
+  thrL.position.set(-0.5, -0.08, -2.9);
   body.add(thrL);
-  const thrR = new THREE.Mesh(thrustGeo, glow);
-  thrR.position.set(0.5, -0.1, -2.6);
+
+  const thrR = new THREE.Group();
+  thrR.add(new THREE.Mesh(thrustHousing.clone(), acc));
+  const flameR = new THREE.Mesh(flameGeo.clone(), glow);
+  flameR.position.z = -0.8;
+  thrR.add(flameR);
+  thrR.position.set(0.5, -0.08, -2.9);
   body.add(thrR);
 
-  // Lanzamisiles (bajo alas)
-  const misGeo = new THREE.CylinderGeometry(0.12, 0.12, 1.2, 6);
-  misGeo.rotateX(Math.PI / 2);
-  const misL = new THREE.Mesh(misGeo, red);
-  misL.position.set(-2.5, -0.2, 0);
-  body.add(misL);
-  const misR = new THREE.Mesh(misGeo, red);
-  misR.position.set(2.5, -0.2, 0);
-  body.add(misR);
+  /* --- Líneas neón decorativas --- */
+  // Línea central ventral
+  const vLine = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 4.0), glow);
+  vLine.position.set(0, -0.28, -0.2);
+  body.add(vLine);
+
+  // Halo sutil debajo
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), glowH);
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.set(0, -0.5, -0.2);
+  body.add(halo);
 
   root.visible = false;
   scene.add(root);
   return { root, body, thrL, thrR };
 }
 
-/* --- Nave nodriza steampunk --- */
+/* --- Nave nodriza steampunk (Dreadnought) --- */
 function buildBoss() {
   const root = new THREE.Group();
 
-  const hull = std({ color: 0x3a2a1a, metalness: 0.6, roughness: 0.5 });
-  const copper = std({ color: 0xb87333, metalness: 0.8, roughness: 0.3 });
-  const dark = std({ color: 0x1a1210, metalness: 0.4, roughness: 0.7 });
-  const coreGlow = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
-  const shieldMat = basic({ color: 0x44aaff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false });
+  /* --- Materiales --- */
+  const hull    = std({ color: 0x3a2a1a, metalness: 0.65, roughness: 0.45 });
+  const hullD   = std({ color: 0x2a1c10, metalness: 0.55, roughness: 0.55 });
+  const copper  = std({ color: 0xb87333, metalness: 0.85, roughness: 0.25 });
+  const brass   = std({ color: 0xd4a84b, metalness: 0.9,  roughness: 0.2 });
+  const dark    = std({ color: 0x1a1210, metalness: 0.4,  roughness: 0.7 });
+  const iron    = std({ color: 0x555555, metalness: 0.7,  roughness: 0.4 });
+  const coreGlow   = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
+  const orangeGlow = basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+  const steamGlow  = basic({ color: 0xffddaa, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false });
 
-  // Casco principal — forma de dirigible achatado
-  const hullGeo = new THREE.BoxGeometry(16, 3, 8, 2, 1, 2);
-  // Redondear ligeramente los vértices
-  const pos = hullGeo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const fx = 1 - Math.pow(Math.abs(x) / 8, 3) * 0.3;
-    pos.setY(i, y * fx);
+  /* ========== CASCO PRINCIPAL — dirigible acorazado ========== */
+  const hullGeo = new THREE.BoxGeometry(18, 3.5, 9, 3, 1, 3);
+  const hp = hullGeo.attributes.position;
+  for (let i = 0; i < hp.count; i++) {
+    const x = hp.getX(i), y = hp.getY(i), z = hp.getZ(i);
+    // Proa redondeada, popa cuadrada
+    const tz = (z + 4.5) / 9;
+    const taperZ = tz > 0.6 ? 1 : 0.5 + 0.5 * (tz / 0.6);
+    const taperX = 1 - 0.25 * Math.pow(Math.abs(x) / 9, 2.5);
+    hp.setX(i, x * taperZ);
+    hp.setY(i, y * taperX * (0.85 + 0.15 * Math.cos(Math.PI * (tz - 0.5))));
   }
   hullGeo.computeVertexNormals();
   const hullMesh = new THREE.Mesh(hullGeo, hull);
   root.add(hullMesh);
 
-  // Superestructura (puente de mando arriba)
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 3), dark);
-  bridge.position.set(0, 2, 0);
-  root.add(bridge);
+  // Quilla inferior (keel)
+  const keel = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 8), hullD);
+  keel.position.set(0, -2.0, 0);
+  root.add(keel);
 
-  // Chimeneas steampunk
-  for (let i = -1; i <= 1; i += 2) {
-    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3, 8), copper);
-    chimney.position.set(i * 3, 3.5, -1);
-    root.add(chimney);
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.5, 0.4, 8), copper);
-    rim.position.set(i * 3, 5, -1);
-    root.add(rim);
+  // Cinturón blindado lateral (belt armor)
+  for (let s = -1; s <= 1; s += 2) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.8, 7.5), iron);
+    belt.position.set(s * 8.8, -0.5, 0.3);
+    root.add(belt);
+    // Remaches decorativos (esferas pequeñas)
+    for (let rz = -3; rz <= 3; rz += 1.5) {
+      const rivet = new THREE.Mesh(new THREE.SphereGeometry(0.12, 4, 4), brass);
+      rivet.position.set(s * 9.05, -0.5, rz);
+      root.add(rivet);
+    }
   }
 
-  // Engranajes decorativos (laterales)
-  for (let i = -1; i <= 1; i += 2) {
-    const gear = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.2, 6, 12), copper);
-    gear.position.set(i * 8.2, 0, 0);
-    gear.rotation.y = Math.PI / 2;
-    root.add(gear);
+  /* ========== SUPERESTRUCTURA ========== */
+  // Puente de mando (escalonado)
+  const bridge1 = new THREE.Mesh(new THREE.BoxGeometry(5, 1.5, 3.5), dark);
+  bridge1.position.set(0, 2.2, 0.5);
+  root.add(bridge1);
+  const bridge2 = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.2, 2.2), dark);
+  bridge2.position.set(0, 3.4, 0.5);
+  root.add(bridge2);
+  // Ventanas del puente (tira de luz)
+  const bridgeWin = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.25, 0.1), steamGlow);
+  bridgeWin.position.set(0, 2.6, 2.3);
+  root.add(bridgeWin);
+
+  // Mástil con antena
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.5, 4), iron);
+  mast.position.set(0, 5.2, 0.5);
+  root.add(mast);
+  const antenna = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 4), brass);
+  antenna.position.set(0, 6.5, 0.5);
+  root.add(antenna);
+
+  /* ========== CHIMENEAS STEAMPUNK (3 pares) ========== */
+  const chimPositions = [[-3, -1.2], [-1, -0.5], [1.5, -1.5]];
+  chimPositions.forEach(([cx, cz]) => {
+    for (let s = -1; s <= 1; s += 2) {
+      const h = 2.5 + Math.random() * 1.5;
+      const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, h, 8), copper);
+      chimney.position.set(s * Math.abs(cx), 1.75 + h / 2, cz);
+      root.add(chimney);
+      // Anillo superior
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.4, 0.35, 8), brass);
+      rim.position.set(s * Math.abs(cx), 1.75 + h + 0.17, cz);
+      root.add(rim);
+      // "Humo" glow
+      const smoke = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), steamGlow);
+      smoke.position.set(s * Math.abs(cx), 1.75 + h + 0.6, cz);
+      root.add(smoke);
+    }
+  });
+
+  /* ========== ENGRANAJES LATERALES (grandes + pequeños) ========== */
+  for (let s = -1; s <= 1; s += 2) {
+    const gearBig = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.22, 6, 14), copper);
+    gearBig.position.set(s * 9.2, 0, -0.5);
+    gearBig.rotation.y = Math.PI / 2;
+    root.add(gearBig);
+    // Hub central del engranaje
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8), brass);
+    hub.rotation.z = Math.PI / 2;
+    hub.position.set(s * 9.2, 0, -0.5);
+    root.add(hub);
+    // Engranaje pequeño
+    const gearSm = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.15, 6, 10), copper);
+    gearSm.position.set(s * 9.2, 1.6, -0.5);
+    gearSm.rotation.y = Math.PI / 2;
+    root.add(gearSm);
+    // Cadena (cilindro fino)
+    const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.4, 4), iron);
+    chain.position.set(s * 9.2, 0.8, -0.5);
+    root.add(chain);
   }
 
-  // Torretas laterales
+  /* ========== TORRETAS LATERALES (artillería pesada) ========== */
   const turrets = [];
-  for (let i = -1; i <= 1; i += 2) {
-    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.2, 1.5, 8), dark);
-    tBase.position.set(i * 6, -1.5, 0);
+  for (let s = -1; s <= 1; s += 2) {
+    // Base giratoria
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.5, 1.2, 10), dark);
+    tBase.position.set(s * 6.5, -1.5, 1);
     root.add(tBase);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3, 6), copper);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(i * 6, -1.5, 2.5);
+    // Escudo de torreta
+    const shield = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 1.8), iron);
+    shield.position.set(s * 6.5, -1, 1.8);
+    root.add(shield);
+    // Cañón doble
+    const barrelGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.5, 6);
+    barrelGeo.rotateX(Math.PI / 2);
+    const barrel1 = new THREE.Mesh(barrelGeo, copper);
+    barrel1.position.set(s * 6.5 + s * 0.4, -1, 3.3);
+    root.add(barrel1);
+    const barrel2 = new THREE.Mesh(barrelGeo.clone(), copper);
+    barrel2.position.set(s * 6.5 - s * 0.4, -1, 3.3);
+    root.add(barrel2);
+    // Boca de fuego (glow)
+    const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), orangeGlow);
+    muzzle.position.set(s * 6.5, -1, 5.0);
+    root.add(muzzle);
+    // barrel ref = barrel1 for hiding
+    const barrel = new THREE.Group();
+    barrel.add(barrel1); barrel.add(barrel2); barrel.add(muzzle); barrel.add(shield);
     root.add(barrel);
-    turrets.push({ base: tBase, barrel, side: i, alive: true });
+    turrets.push({ base: tBase, barrel, side: s, alive: true });
   }
 
-  // Núcleo central (debajo del casco)
-  const core = new THREE.Mesh(new THREE.SphereGeometry(1.8, 12, 8), coreGlow);
-  core.position.set(0, -2.5, 0);
+  /* ========== NÚCLEO DE ENERGÍA (debajo del casco) ========== */
+  const core = new THREE.Mesh(new THREE.SphereGeometry(2.0, 14, 10), coreGlow);
+  core.position.set(0, -2.8, 0);
   root.add(core);
+  // Anillo de contención alrededor del núcleo
+  const coreRing = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.15, 6, 16), copper);
+  coreRing.position.set(0, -2.8, 0);
+  coreRing.rotation.x = Math.PI / 2;
+  root.add(coreRing);
+  const coreRing2 = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.12, 6, 16), brass);
+  coreRing2.position.set(0, -2.8, 0);
+  coreRing2.rotation.z = Math.PI / 3;
+  root.add(coreRing2);
 
-  // Coraza que protege el núcleo (fase 1)
-  const armor = new THREE.Mesh(new THREE.BoxGeometry(6, 1.2, 5), hull);
-  armor.position.set(0, -2, 0);
+  /* ========== CORAZA PROTECTORA (fase 1) ========== */
+  const armorGeo = new THREE.BoxGeometry(7, 1.5, 5.5, 2, 1, 2);
+  const ap = armorGeo.attributes.position;
+  for (let i = 0; i < ap.count; i++) {
+    const x = ap.getX(i);
+    ap.setY(i, ap.getY(i) * (1 - 0.15 * Math.pow(Math.abs(x) / 3.5, 2)));
+  }
+  armorGeo.computeVertexNormals();
+  const armor = new THREE.Mesh(armorGeo, hull);
+  armor.position.set(0, -2.2, 0);
   root.add(armor);
+  // Planchas de blindaje extra
+  for (let az = -1.5; az <= 1.5; az += 1.5) {
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.15, 1.2), iron);
+    plate.position.set(0, -1.5, az);
+    root.add(plate);
+  }
 
-  // Propulsores inferiores
-  for (let i = -1; i <= 1; i += 2) {
-    const prop = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 1, 8), copper);
-    prop.position.set(i * 5, -2.5, -2);
-    root.add(prop);
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2, 8), basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-    flame.position.set(i * 5, -4, -2);
+  /* ========== PROPULSORES (4 motores con llamas) ========== */
+  const propPositions = [[-5.5, -2], [5.5, -2], [-3, -3], [3, -3]];
+  propPositions.forEach(([px, pz]) => {
+    // Carcasa
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 1.2, 8), copper);
+    housing.position.set(px, -2.2, pz);
+    root.add(housing);
+    // Tobera interior
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.3, 0.4, 8), dark);
+    nozzle.position.set(px, -2.9, pz);
+    root.add(nozzle);
+    // Llama
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.2, 8), orangeGlow);
+    flame.position.set(px, -4.2, pz);
     flame.rotation.x = Math.PI;
     root.add(flame);
+  });
+
+  /* ========== PROA (espolón) ========== */
+  const ram = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3, 6), iron);
+  ram.rotation.x = Math.PI / 2;
+  ram.position.set(0, -0.5, 6);
+  root.add(ram);
+  // Decoración proa
+  const ramRing = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.1, 6, 10), brass);
+  ramRing.position.set(0, -0.5, 5);
+  root.add(ramRing);
+
+  /* ========== DETALLES DECORATIVOS ========== */
+  // Tuberías laterales
+  for (let s = -1; s <= 1; s += 2) {
+    for (let pz = -2; pz <= 2; pz += 2) {
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 2.5, 6), copper);
+      pipe.rotation.z = Math.PI / 2;
+      pipe.position.set(s * 7, 1.2, pz);
+      root.add(pipe);
+    }
+    // Ojo de buey (porthole) — torus pequeño
+    for (let pz = -2; pz <= 2; pz += 2) {
+      const port = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.06, 6, 8), brass);
+      port.position.set(s * 9.1, 0.3, pz);
+      port.rotation.y = Math.PI / 2;
+      root.add(port);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), steamGlow);
+      glass.position.set(s * 9.05, 0.3, pz);
+      glass.rotation.y = s > 0 ? Math.PI / 2 : -Math.PI / 2;
+      root.add(glass);
+    }
   }
 
   root.visible = false;
@@ -11745,7 +11982,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '1167f231';
+window.NS_BUILD = 'a949e653';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
