@@ -10022,6 +10022,7 @@ function ghostsFinish(win) {
 }
 Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.ghostWorld = save.world || 'neon'; race.ghostSrc = list; } });
 
+const SPY_ENABLED = false;
 /* =====================================================================
    SPY HUNTER MODE — Prototipo
    Fase de suelo: recoge 4 piezas para transformarte en avión.
@@ -12857,7 +12858,7 @@ function spyFx(t) {}
 function openSpyPre() { show('spypre'); }
 
 Object.assign(actions, {
-  spy: openSpyPre,
+  spy() { if (SPY_ENABLED) openSpyPre(); },
   'spy-start'() { race.mode = false; spy.mode = true; startRun(); },
   'spy-back'() { spyCleanup(); show('menu'); },
 });
@@ -12883,8 +12884,8 @@ startRun = function () {
   }
 };
 
-// Badge de Spy Hunter
-if (typeof BADGES !== 'undefined') {
+// Badge de Spy Hunter (solo si el modo está visible)
+if (SPY_ENABLED && typeof BADGES !== 'undefined') {
   BADGES.push({
     id: 'spyhunter', name: 'SPY HUNTER',
     colors: ['#1a2a4a', '#ff2bd6'],
@@ -13459,7 +13460,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '398af9e2';
+window.NS_BUILD = 'e725c09e';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
