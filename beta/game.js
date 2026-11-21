@@ -13110,9 +13110,10 @@ function buildPhantom(o) {
 const _dlcBuildCar = buildCar;
 buildCar = function (o) { return o && o.style === 'phantom' ? buildPhantom(o) : _dlcBuildCar(o); };
 
-// en el garaje (DLC)
-CARS.push({ id: 'phantom82', name: 'Phantom 82', hex: '#0d0d11', color: 0x0d0d11, accent: 0xff1a1a, price: 12000, style: 'phantom', dlc: true,
+// en el garaje (DLC): desbloqueado de serie y el segundo de la lista
+CARS.splice(1, 0, { id: 'phantom82', name: 'Phantom 82', hex: '#0d0d11', color: 0x0d0d11, accent: 0xff1a1a, price: 0, style: 'phantom', dlc: true,
   st: { speed: 3, handling: 3, nitro: 4 } });
+if (typeof save !== 'undefined' && save.owned && !save.owned.includes('phantom82')) save.owned.push('phantom82');
 
 // gancho de pruebas
 let _dlcCam = null;
@@ -13666,7 +13667,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = 'e9940111';
+window.NS_BUILD = 'ce74d658';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
