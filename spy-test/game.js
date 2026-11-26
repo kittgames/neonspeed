@@ -10307,11 +10307,10 @@ let _glbPlane = null, _glbBoss = null, _glbEnemy = null, _glbLoading = null;
 
 function preloadSpyModels() {
   if (_glbLoading) return _glbLoading;
-  // plane.glb = avión del jugador; boss.glb = nave nodriza (buildBossV3, con buildBossV2 procedural
-  // de reserva si no ha cargado). Los enemigos aéreos son procedurales (buildAirEnemy), así que
-  // enemy.glb no se descarga.
+  // boss.glb = nave nodriza (buildBossV3, con buildBossV2 procedural de reserva si no ha cargado).
+  // El avión del jugador es su propio coche con el kit de vuelo (buildCarPlane) y los enemigos
+  // aéreos son procedurales (buildAirEnemy): plane.glb y enemy.glb ya no se descargan.
   _glbLoading = Promise.all([
-    fetch('plane.glb').then(r => r.arrayBuffer()).then(buf => { _glbPlane = parseGLB(buf); }).catch(e => { console.warn('plane.glb load failed, using procedural:', e); }),
     fetch('boss.glb').then(r => r.arrayBuffer()).then(buf => { _glbBoss = parseGLB(buf); }).catch(e => { console.warn('boss.glb load failed, using procedural:', e); }),
   ]);
   return _glbLoading;
@@ -11562,7 +11561,8 @@ function spyStart() {
   spy.phase = 'ground';
 
   // Construir modelos que necesitemos (lazy)
-  if (!spy.plane) spy.plane = buildPlane();
+  const carId = _spCarDef().id;
+  if (!spy.plane || spy.plane.carId !== carId) { if (spy.plane) scene.remove(spy.plane.root); spy.plane = buildCarPlane(); }
   if (!spy.boss) spy.boss = buildBossV2();
 
   gfxEnsure();
@@ -12046,6 +12046,7 @@ function gReset() {
   if (G.root && G.root.parent) G.root.parent.remove(G.root);
   if (playerModel) playerModel.root.scale.setScalar(1);
   spy.noBlink = false;
+  if (G.fill) G.fill.intensity = 0;
   gHudShow(false);
 }
 function gStart(daily) {
@@ -13406,7 +13407,7 @@ function gSectionStart(i) {
   G.stats[i] = { t0: run.time, inc: 0, dmg: 0, done: false };
   gBanner(S.name, S.sub, '#00f0ff', 2.8, true);
   // identidad visual por tramo
-  if (S.id === 'tunnel') { if (G.savedCycle == null) G.savedCycle = cycle; G.cycleT = 0.8; G.dark = 1; }
+  if (S.id === 'tunnel') { if (G.savedCycle == null) G.savedCycle = cycle; G.cycleT = 0.64; G.dark = 1; }
   else if (S.id === 'final') { G.cycleT = 0.56; G.dark = 0; }
   else { G.dark = 0; if (G.savedCycle != null && S.id !== 'final') G.cycleT = G.savedCycle; }
   if (S.id === 'city') G.crossT = 3;
@@ -13435,9 +13436,13 @@ function gDarkTick(dt) {
     if (Math.abs(d) < 0.002) { cycle = G.cycleT; if (gSec().id !== 'tunnel' && gSec().id !== 'final') { G.cycleT = null; G.savedCycle = null; } }
   }
   const el = gDarkEl();
-  const want = G.dark && !G.boat ? 0.85 : 0;
+  const want = G.dark && !G.boat ? 0.42 : 0;
   el._o = (el._o || 0) + (want - (el._o || 0)) * (1 - Math.exp(-dt * 2));
   el.style.opacity = el._o.toFixed(3);
+  // luz de relleno en los tramos oscuros: coches y carretera se siguen leyendo bien
+  if (!G.fill) { G.fill = new THREE.HemisphereLight(0xcfe0ff, 0x4a5a78, 0); G.root.add(G.fill); }
+  const night = todState.night || 0;
+  G.fill.intensity += (night * 1.6 - G.fill.intensity) * (1 - Math.exp(-dt * 2));
 }
 /* tutorial integrado (solo la primera vez) */
 function gTutTick(dt) {
@@ -13837,57 +13842,67 @@ const _tfEase = { out: t => 1 - Math.pow(1 - t, 3), back: t => { const c1 = 1.9,
 const _tfK = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
 
 /* piezas que salen del coche (se cuelgan de su raíz y se adaptan a su tamaño) */
-function _tfBuildRig(m) {
-  const W = (m.halfW || 0.95), L = (m.halfL || 2.2), H = 1.15;
+/* Kit de vuelo sobre el coche del jugador: alas rectas del color de la carrocería con detalles
+   cian, góndolas de motor, winglets, toberas traseras y las ruedas convertidas en propulsores.
+   Lo usan la transformación (animado) y el avión de la fase aérea (ya desplegado). */
+const FLY = { SPAN: 2.3, CYAN: 0x4fd8ff };
+function _tfBuildRig(m, colorHex) {
+  const W = (m.halfW || 0.95), L = (m.halfL || 2.2);
   const g = new THREE.Group();
-  const carbon = std({ color: 0x111723, metalness: 0.55, roughness: 0.32, envMapIntensity: 0.7 });
-  const panel = std({ color: 0x2a3d5c, metalness: 0.6, roughness: 0.3, envMapIntensity: 0.7 });
+  // la misma pintura que la carrocería, para que alas y coche sean del mismo color
+  const skin = colorHex == null ? std({ color: 0xe9eef4, metalness: 0.3, roughness: 0.38, envMapIntensity: 0.55 }) : paint(colorHex, true);
+  const trim = std({ color: 0xcfd6de, metalness: 0.5, roughness: 0.35, envMapIntensity: 0.5 });
+  const dark = std({ color: 0x14181f, metalness: 0.5, roughness: 0.4, envMapIntensity: 0.5 });
+  const cyan = basic({ color: FLY.CYAN });
   const neon = basic({ color: 0x00f0ff, transparent: true, opacity: 0 });
   const pink = basic({ color: 0xff2bd6, transparent: true, opacity: 0 });
   const flameM = basic({ color: 0x7df9ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
   const coreM = basic({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
   const padM = basic({ color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
   const R = { g, neon, pink, padM, wings: [], canards: [], fins: [], nozzles: [], flames: [], pads: [], seams: [] };
-  // costuras de neón a lo largo del coche (se encienden primero)
+  // costuras de neón a lo largo del coche (se encienden al empezar la transformación)
   for (const sd of [-1, 1]) {
     const seam = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, L * 1.7), sd < 0 ? neon : pink);
     seam.position.set(sd * (W + 0.02), 0.62, 0); g.add(seam); R.seams.push(seam);
   }
   // alas: bisagra en el costado; plegadas hacia arriba, salen, bajan y se alargan
-  const wingGeo = _airShapeGeo([[0, -0.9], [3.1, 0.35], [3.1, 0.85], [0, 1.15]], 0.12, 0.04);
-  const edgeLen = Math.hypot(3.1, 1.25), edgeAng = Math.atan2(1.25, 3.1);
+  const SP = FLY.SPAN, zl0 = -0.95, zl1 = -0.25, zt0 = 0.95, zt1 = 0.72;       // borde de ataque y de salida (raíz → punta)
+  const wingGeo = _airShapeGeo([[0, zl0], [SP, zl1], [SP, zt1], [0, zt0]], 0.14, 0.04);
+  const leadLen = Math.hypot(SP, zl1 - zl0), leadAng = Math.atan2(zl1 - zl0, SP), trailAng = Math.atan2(zt1 - zt0, SP);
+  const podGeo = new THREE.CylinderGeometry(0.17, 0.2, 0.95, 12); podGeo.rotateX(Math.PI / 2);
+  const capGeo = new THREE.CylinderGeometry(0.175, 0.175, 0.2, 12); capGeo.rotateX(Math.PI / 2);
+  const wickGeo = new THREE.ConeGeometry(0.05, 0.42, 6); wickGeo.rotateX(Math.PI / 2);
   for (const sd of [-1, 1]) {
-    const hinge = new THREE.Group(); hinge.position.set(sd * W * 0.92, 0.58, 0.25);
+    const hinge = new THREE.Group(); hinge.position.set(sd * W * 0.92, 0.6, 0.2);
     const wg = new THREE.Group(); wg.scale.x = sd; hinge.add(wg);
-    wg.add(new THREE.Mesh(wingGeo, carbon));
-    const edge = new THREE.Mesh(new THREE.BoxGeometry(edgeLen, 0.05, 0.07), neon);
-    edge.position.set(1.55, 0.09, -0.28); edge.rotation.y = -edgeAng; wg.add(edge);
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.35, 0.55), panel); tip.position.set(3.05, 0.12, 0.62); wg.add(tip);
-    const tipL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.3), pink); tipL.position.set(3.1, 0.32, 0.62); wg.add(tipL);
+    wg.add(new THREE.Mesh(wingGeo, skin));
+    // franja cian en el borde de ataque
+    const lead = new THREE.Mesh(new THREE.BoxGeometry(leadLen, 0.05, 0.2), cyan);
+    lead.position.set(SP / 2, 0.1, (zl0 + zl1) / 2 + 0.1); lead.rotation.y = -leadAng; wg.add(lead);
+    // paneles cian en el borde de salida (alerones)
+    for (const [x0, len] of [[0.12, SP * 0.4], [SP * 0.48, SP * 0.46]]) {
+      const xm = x0 + len / 2, flap = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.3), cyan);
+      flap.position.set(xm, 0.1, zt0 + (zt1 - zt0) * xm / SP - 0.2); flap.rotation.y = -trailAng; wg.add(flap);
+    }
+    // dos góndolas de motor sobre el ala, asomando por el borde de ataque
+    for (const x of [SP * 0.36, SP * 0.7]) {
+      const zl = zl0 + (zl1 - zl0) * x / SP;
+      const pod = new THREE.Mesh(podGeo, trim); pod.position.set(x, 0.2, zl + 0.2); wg.add(pod);
+      const cap = new THREE.Mesh(capGeo, cyan); cap.position.set(x, 0.2, zl - 0.32); wg.add(cap);
+    }
+    // winglet en la punta y descargadores en el borde de salida
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, zt1 - zl1 + 0.1), trim); tip.position.set(SP + 0.02, 0.2, (zl1 + zt1) / 2); wg.add(tip);
+    for (const x of [SP * 0.42, SP * 0.86]) { const wk = new THREE.Mesh(wickGeo, trim); wk.position.set(x, 0.02, zt0 + (zt1 - zt0) * x / SP + 0.2); wg.add(wk); }
     g.add(hinge); R.wings.push({ hinge, wg, sd });
   }
-  // canards delante
-  const canGeo = _airShapeGeo([[0, -0.35], [1.05, 0.02], [1.05, 0.25], [0, 0.38]], 0.07, 0.02);
+  // toberas traseras y llamas
+  const nozGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.7, 14); nozGeo.rotateX(Math.PI / 2);
+  const flGeo = new THREE.ConeGeometry(0.22, 2.0, 12); flGeo.rotateX(Math.PI / 2); flGeo.translate(0, 0, 1.0);
+  const coreGeo = new THREE.ConeGeometry(0.11, 1.1, 10); coreGeo.rotateX(Math.PI / 2); coreGeo.translate(0, 0, 0.55);
   for (const sd of [-1, 1]) {
-    const c = new THREE.Group(); c.position.set(sd * W * 0.85, 0.72, -L + 0.75);
-    const cm = new THREE.Mesh(canGeo, panel); cm.scale.x = sd; c.add(cm);
-    c.scale.setScalar(0.001); g.add(c); R.canards.push(c);
-  }
-  // derivas detrás
-  for (const sd of [-1, 1]) {
-    const f = new THREE.Group(); f.position.set(sd * 0.48, H * 0.82, L - 0.55);
-    const fm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.0, 0.85), panel); fm.position.y = 0.5; fm.rotation.x = 0.3; f.add(fm);
-    const fl = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.6, 0.06), neon); fl.position.set(0, 0.55, -0.15); fl.rotation.x = 0.3; f.add(fl);
-    f.rotation.z = -sd * Math.PI / 2; f.scale.setScalar(0.001); g.add(f); R.fins.push({ f, sd });
-  }
-  // toberas y llamas
-  const nozGeo = new THREE.CylinderGeometry(0.24, 0.3, 0.85, 14); nozGeo.rotateX(Math.PI / 2);
-  const flGeo = new THREE.ConeGeometry(0.24, 2.0, 12); flGeo.rotateX(Math.PI / 2); flGeo.translate(0, 0, 1.0);
-  const coreGeo = new THREE.ConeGeometry(0.12, 1.1, 10); coreGeo.rotateX(Math.PI / 2); coreGeo.translate(0, 0, 0.55);
-  for (const sd of [-1, 1]) {
-    const n = new THREE.Mesh(nozGeo, carbon); n.position.set(sd * 0.42, 0.52, L - 0.7); g.add(n); R.nozzles.push(n);
+    const n = new THREE.Mesh(nozGeo, dark); n.position.set(sd * 0.42, 0.5, L - 0.7); g.add(n); R.nozzles.push(n);
     const fl = new THREE.Group(); fl.add(new THREE.Mesh(flGeo, flameM), new THREE.Mesh(coreGeo, coreM));
-    fl.position.set(sd * 0.42, 0.52, L + 0.05); fl.scale.set(1, 1, 0.001); fl.visible = false; g.add(fl); R.flames.push(fl);
+    fl.position.set(sd * 0.42, 0.5, L + 0.05); fl.scale.set(1, 1, 0.001); fl.visible = false; g.add(fl); R.flames.push(fl);
   }
   // propulsores donde estaban las ruedas
   const padGeo = new THREE.TorusGeometry(0.34, 0.07, 6, 24); padGeo.rotateX(Math.PI / 2);
@@ -13898,6 +13913,34 @@ function _tfBuildRig(m) {
   });
   m.root.add(g);
   return R;
+}
+/* coche del jugador en uso (puede no ser el seleccionado: reto diario, etc.) */
+function _spCarDef() {
+  let id = save.selected;
+  playerModels.forEach((mm, k) => { if (mm === playerModel) id = k; });
+  return carById(id);
+}
+/* avión de la fase aérea: una copia del coche del jugador con el kit de vuelo ya desplegado */
+function buildCarPlane() {
+  const c = _spCarDef();
+  const m = buildCar({ color: c.color, accent: c.accent, player: true, style: c.style });
+  m.root.traverse(o => { if (o.isMesh && o.material === MAT.blob) o.visible = false; });   // sin sombra de asfalto
+  const R = _tfBuildRig(m, c.color);
+  const L = m.halfL || 2.2;
+  R.wings.forEach(w => { w.hinge.rotation.z = 0; w.wg.scale.set(w.sd, 1, 1); });
+  R.nozzles.forEach(n => { n.position.z = L - 0.7 + 0.75; });
+  R.flames.forEach(f => { f.visible = true; f.position.z = L + 0.8; f.scale.set(1, 1, 1); });
+  R.neon.opacity = R.pink.opacity = 0;                  // las costuras solo brillan durante la transformación
+  R.padM.opacity = 0.55;
+  (m.wheels || []).forEach(w => {                        // ruedas planas: propulsores
+    const sd = Math.sign(w._tf0.x) || 1;
+    w.steer.rotation.z = w._tf0.rz + sd * Math.PI / 2; w.steer.position.x = w._tf0.x * 0.88; w.steer.position.y = w._tf0.y + 0.08;
+  });
+  const root = new THREE.Group(), body = new THREE.Group();
+  m.root.position.y = -0.6;                              // alabea y cabecea alrededor del centro del coche
+  body.add(m.root); root.add(body);
+  root.visible = false; scene.add(root);
+  return { root, body, thrL: R.flames[0], thrR: R.flames[1], carId: c.id, rig: R, model: m };
 }
 function _tfRestoreCar() {
   const m = playerModel;
@@ -13989,7 +14032,7 @@ function spyBeginTransform() {
   spyClearPickups();
   gFieldClear();
   _tfRestoreCar();
-  if (playerModel) { playerModel.root.visible = true; _tfRig = _tfBuildRig(playerModel); }
+  if (playerModel) { playerModel.root.visible = true; _tfRig = _tfBuildRig(playerModel, _spCarDef().color); }
   spy.tf.cam0 = { pos: spy.cam.pos.clone(), look: spy.cam.look.clone(), fov: spy.cam.fov };
   _tfUiShow(true);
   _tfStep('arm', '<b>MODE SHIFT</b> // AIR CONFIGURATION');
@@ -14176,7 +14219,7 @@ const AIR = {
   ARENA_W: 44, ARENA_H: 58,
   SCROLL: 20, SCROLL_BOOST: 58, SCROLL_BOSS: 8,
   SPEED: 36, FOCUS_SPEED: 15, RESP: 32, TOUCH_GAIN: 1.25, TOUCH_MAX: 140,
-  HIT_R: 0.75, GRAZE_R: 2.6, PLANE_SCALE: 1.9,
+  HIT_R: 0.75, GRAZE_R: 2.6, PLANE_SCALE: 1.6,
   SHOT_RATE: 0.07, SHOT_SPEED: 150, MIS_RATE: 0.55, MIS_DMG: 3, MIS_SPEED: 62, MIS_TURN: 6,
   BOMBS: 2, BOMB_DMG: 40,
   DMG_BULLET: 20, DMG_RAM: 30, DMG_BEAM: 35, DMG_BLAST: 30, IFRAMES: 1.6, BOMB_IFRAMES: 2.4,
@@ -15858,7 +15901,9 @@ function spyAirCamTarget() { return airCamPose(); }
 function spyThrusters(k) {
   if (!spy.plane || !spy.plane.thrL) return;
   const sc = k * (0.8 + Math.sin(simTime * 15) * 0.2);
-  spy.plane.thrL.scale.set(sc, sc, sc); spy.plane.thrR.scale.set(sc, sc, sc);
+  spy.plane.thrL.scale.set(1, 1, sc); spy.plane.thrR.scale.set(1, 1, sc);
+  const R = spy.plane.rig;
+  if (R) R.pads.forEach((p, i) => { const q = 1 + 0.2 * Math.sin(simTime * 14 + i); p.scale.set(q, 1, q); });
 }
 function spyClearPickups() {
   coins.forEach(c => { c.alive = false; });
@@ -17194,7 +17239,8 @@ sun.shadow.normalBias = 0.02;
   updateCamera = dt => {
     _uc(dt);
     // en Spy la cámara es cenital: el desenfoque radial y la aberración cromática parecen un fallo gráfico
-    if (spy.mode && spy.phase !== 'off') { Post.u.radial.value = 0; Post.u.aberr.value = 0; return; }
+    // y el resplandor (bloom) se queda siempre en su nivel de día, también de noche
+    if (spy.mode && spy.phase !== 'off') { Post.u.radial.value = 0; Post.u.aberr.value = 0; Post.b.threshold.value = 0.88; Post.u.strength.value = 0.42; return; }
     const sf = clamp(player.speed / P.maxSpeed, 0, 1.6), playing = state === 'playing';
     const nitro = playing && player.nitroOn ? 1 : 0, calm = save.settings.reducedMotion;
     if (nitro && !wasNitro) kick = 1; // golpe al encender el nitro
