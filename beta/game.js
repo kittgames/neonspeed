@@ -4418,12 +4418,18 @@ function loadSave() {
     });
     return d;
   }
-  return Object.assign(d, s, {
+  const out = Object.assign(d, s, {
     upgrades: Object.assign(d.upgrades, s.upgrades || {}),
     settings: Object.assign(d.settings, s.settings || {}),
     stats: Object.assign(d.stats, s.stats || {}),
     badges: Object.assign({}, s.badges || {}),
   });
+  // Defensas ante datos guardados dañados o con tipos incorrectos (p. ej. owned: null)
+  const def = defaultSave();
+  if (!Array.isArray(out.owned) || !out.owned.length) out.owned = def.owned;
+  if (!out.owned.includes(out.selected)) out.selected = out.owned[0];
+  if (typeof out.coins !== 'number' || !isFinite(out.coins) || out.coins < 0) out.coins = 0;
+  return out;
 }
 let save = loadSave();
 const persist = () => store.set(SAVE_KEY, JSON.stringify(save));
@@ -10103,6 +10109,9 @@ const SPY = {
 /* ---------- estado ---------- */
 const spy = {
   mode: false,          // modo activo
+  gen: 0,               // generación de partida: invalida temporizadores de partidas anteriores
+  ended: false,         // spyEnd ya se ejecutó en esta partida
+  bossDying: false,     // el jefe ya está muriendo (explosión en curso)
   phase: 'off',         // off | ground | transform | air | boss | win | dead
   hp: SPY.HP_MAX,
   lastDmg: 0,          // tiempo desde último daño
@@ -11210,6 +11219,9 @@ function bossAreaAttack() {
    ============================================================ */
 
 function spyReset() {
+  spy.gen++;            // cancela temporizadores pendientes de la partida anterior
+  spy.ended = false;
+  spy.bossDying = false;
   spy.phase = 'off';
   spy.hp = SPY.HP_MAX;
   spy.lastDmg = 0;
@@ -11227,7 +11239,6 @@ function spyReset() {
   spy.bossPhase = 1;
   spy.turretHP = [SPY.TURRET_HP, SPY.TURRET_HP];
   spy.coreHP = SPY.CORE_HP;
-  spy.attacks = [];
   spy.attackCd = 2;
   spy.bossT = 0;
   spy.missileCd = 0;
@@ -11263,6 +11274,13 @@ function spyReset() {
   if (typeof spyAirEnv === 'function') spyAirEnv(false);
 }
 
+/* Temporizador ligado a la partida: si se sale al menú o se empieza otra partida
+   antes de que dispare, se descarta (evita que termine una partida ajena). */
+function spyLater(fn, ms) {
+  const g = spy.gen;
+  setTimeout(() => { if (spy.gen === g && spy.mode) fn(); }, ms);
+}
+
 function spyStart() {
   spy.mode = true;
   spyReset();
@@ -11278,6 +11296,8 @@ function spyStart() {
 }
 
 function spyEnd(won) {
+  if (spy.ended) return;   // evita repetir bonus/insignia/fin de partida
+  spy.ended = true;
   spy.phase = won ? 'win' : 'dead';
   if (won) {
     // Badge: SPY HUNTER
@@ -11295,7 +11315,7 @@ function spyEnd(won) {
     toast('BOSS DESTROYED!', '+5000 bonus', '#ffd23f');
     AudioSys.sfx('powerup');
   }
-  setTimeout(() => {
+  spyLater(() => {
     // Usar el sistema de game over normal
     run.score = spy.score;
     endRun();
@@ -11754,6 +11774,7 @@ function spyUpdateGround(dt) {
    ============================================================ */
 
 function spyDamage(amount) {
+  if (spy.phase === 'dead' || spy.phase === 'win') return; // partida ya decidida
   if (spy.iframes > 0) return; // invulnerable
   spy.hp -= amount;
   spy.lastDmg = 0;
@@ -11769,7 +11790,7 @@ function spyDamage(amount) {
     player.vy = 5;
     AudioSys.sfx('crash');
     burst(player.x, 1, -1, 50, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2], [1, 1, 0.7]], speed: 16, up: 10, life: 1, size: 0.6, spread: 0.6, grav: 14 });
-    setTimeout(() => spyEnd(false), 1500);
+    spyLater(() => spyEnd(false), 1500);
   }
 }
 
@@ -12293,7 +12314,7 @@ function spyUpdateAir(dt) {
 
   // --- Disparar misiles ---
   spy.missileCd -= dt;
-  if (spy.fire && spy.missileCd <= 0) {
+  if (spy.fire && spy.missileCd <= 0 && !spy.bossDying) {
     spy.missileCd = SPY.MISSILE_RATE;
     // 2 misiles por salva, apuntando al jefe
     const bx = spy.boss.root.position.x, bz = spy.boss.root.position.z;
@@ -12308,6 +12329,9 @@ function spyUpdateAir(dt) {
     m.x += m.vx * dt;
     m.z += m.vz * dt;
     m.mesh.position.set(m.x, m.y, m.z);
+
+    // El jefe ya está muriendo: los misiles en vuelo se descartan (no vuelven a puntuar)
+    if (spy.bossDying) { scene.remove(m.mesh); spy.missiles.splice(i, 1); continue; }
 
     // Colisión con el jefe
     const bossPos = spy.boss.root.position;
@@ -12411,7 +12435,7 @@ function spyUpdateAir(dt) {
           // Muerte instantánea en aire (prototipo)
           spy.phase = 'dead';
           planeExplode();
-          setTimeout(() => spyEnd(false), 1500);
+          spyLater(() => spyEnd(false), 1500);
           return;
         }
       }
@@ -12433,6 +12457,7 @@ function spyUpdateAir(dt) {
       if (a.t >= a.warnDur && !a.fired) {
         a.fired = true;
         a.zones.forEach(z => {
+          if (spy.phase === 'dead') return; // ya murió en otra zona
           if (z.warn) { z.warn.material.opacity = 0.6; z.warn.material.color.set(0xff4400); }
           burst(z.x, SPY.AIR_Y, z.z, 15, { colors: [[1, 0.5, 0.1], [1, 0.3, 0]], speed: 10, up: 5, life: 0.6, size: 0.5, spread: 1, grav: 4 });
           // Comprobar si el jugador está en la zona
@@ -12440,7 +12465,7 @@ function spyUpdateAir(dt) {
           if (Math.sqrt(dx * dx + dz * dz) < z.r) {
             spy.phase = 'dead';
             planeExplode();
-            setTimeout(() => spyEnd(false), 1500);
+            spyLater(() => spyEnd(false), 1500);
             return;
           }
         });
@@ -12469,13 +12494,21 @@ function planeExplode() {
 }
 
 function bossExplode() {
-  if (!spy.boss) return;
+  if (!spy.boss || spy.bossDying) return; // una sola explosión por jefe
+  spy.bossDying = true;
+  // el jefe ya no ataca mientras explota (no puede matar al jugador que acaba de ganar)
+  spy.attacks.forEach(a => {
+    if (a.warn) scene.remove(a.warn);
+    if (a.zones) a.zones.forEach(z => { if (z.warn) scene.remove(z.warn); });
+  });
+  spy.attacks = [];
+  spy.attackCd = 999;
   const p = spy.boss.root.position;
 
   // Explosión en cadena
   let delay = 0;
   for (let i = 0; i < 8; i++) {
-    setTimeout(() => {
+    spyLater(() => {
       const ox = rand(-6, 6), oz = rand(-3, 3);
       burst(p.x + ox, SPY.BOSS_Y + rand(-2, 2), p.z + oz, 40,
         { colors: [[1, 0.6, 0.1], [1, 0.3, 0], [1, 0.9, 0.4]], speed: 18, up: 10, life: 1.5, size: 0.8, spread: 1, grav: 5 });
@@ -12485,7 +12518,7 @@ function bossExplode() {
     delay += 300;
   }
 
-  setTimeout(() => {
+  spyLater(() => {
     spy.boss.root.visible = false;
     // Gran explosión final
     burst(p.x, SPY.BOSS_Y, p.z, 100,
