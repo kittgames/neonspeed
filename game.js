@@ -12515,48 +12515,82 @@ const _powTex = _airCanvas(128, (g, s) => {
 });
 
 /* ---------- balas enemigas: un único Points por tamaño (1 draw call) ---------- */
+/* balas enemigas: tres formas dibujadas en el shader (orbe de plasma con remolino, aguja orientada
+   en su dirección y estrella giratoria), contorno oscuro para leerse sobre nubes blancas y una
+   segunda pasada aditiva con halo. Dos draw calls por tamaño. */
+const _ebTime = { value: 0 };
+const _EB_VS = 'uniform float uSize; uniform float uScale; uniform float uGlow;\n' +
+  'attribute vec3 color; attribute float aShape; attribute float aAng;\n' +
+  'varying vec3 vC; varying float vS; varying float vA;\n' +
+  'void main() { vC = color; vS = aShape; vA = aAng; vec4 mv = modelViewMatrix * vec4(position, 1.0);\n' +
+  '  float k = aShape > 1.5 ? 1.3 : (aShape > 0.5 ? 1.75 : 1.0);\n' +
+  '  gl_PointSize = uSize * k * uGlow * uScale / -mv.z; gl_Position = projectionMatrix * mv; }';
+const _EB_FS = 'uniform float uTime; varying vec3 vC; varying float vS; varying float vA;\n' +
+  'void main() {\n' +
+  '  vec2 p = gl_PointCoord - 0.5; p.y = -p.y;\n' +
+  '  float c = cos(vA), s = sin(vA); vec2 q = vec2(c * p.x - s * p.y, s * p.x + c * p.y);\n' +
+  '  float d; vec3 fill;\n' +
+  '  if (vS < 0.5) {\n' +
+  '    d = length(p) * 2.0;\n' +
+  '    float sw = 0.5 + 0.5 * sin(atan(p.y, p.x) * 3.0 - uTime * 12.0 + d * 7.0);\n' +
+  '    fill = mix(vec3(1.0), vC, smoothstep(0.14, 0.6, d));\n' +
+  '    fill = mix(fill, min(vC * 1.4 + 0.25, vec3(1.0)), sw * 0.45 * (1.0 - smoothstep(0.3, 0.72, d)));\n' +
+  '  } else if (vS < 1.5) {\n' +
+  '    d = abs(q.x) / 0.17 + abs(q.y) / 0.49;\n' +
+  '    fill = mix(vec3(1.0), vC, smoothstep(0.08, 0.6, abs(q.x) / 0.17 + max(0.0, -q.y) * 0.9));\n' +
+  '  } else {\n' +
+  '    float a = atan(q.y, q.x) + uTime * 9.0, r = length(q) * 2.0;\n' +
+  '    d = r / (0.48 + 0.5 * pow(abs(cos(a * 2.0)), 4.0));\n' +
+  '    fill = mix(vec3(1.0), vC, smoothstep(0.1, 0.5, r));\n' +
+  '  }\n' +
+  '  if (d > 1.0) discard;\n' +
+  '  float rim = smoothstep(0.72, 0.84, d);\n' +
+  '  gl_FragColor = vec4(mix(fill, vec3(0.1, 0.0, 0.07), rim), 1.0 - smoothstep(0.9, 1.0, d) * 0.9);\n' +
+  '}';
+const _EB_GFS = 'uniform float uTime; varying vec3 vC; varying float vS; varying float vA;\n' +
+  'void main() { float d = length(gl_PointCoord - 0.5) * 2.0; if (d > 1.0) discard;\n' +
+  '  float a = pow(1.0 - d, 2.2) * 0.65 * (0.85 + 0.15 * sin(uTime * 22.0 + vA * 3.0));\n' +
+  '  gl_FragColor = vec4(vC * a, a); }';
 function _airBulletPool(max, size, hitR) {
-  const pos = new Float32Array(max * 3), col = new Float32Array(max * 3);
+  const pos = new Float32Array(max * 3), col = new Float32Array(max * 3), shp = new Float32Array(max), ang = new Float32Array(max);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('aShape', new THREE.BufferAttribute(shp, 1).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('aAng', new THREE.BufferAttribute(ang, 1).setUsage(THREE.DynamicDrawUsage));
   geo.setDrawRange(0, 0);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { uSize: { value: size }, uScale: pointScale },
-    vertexShader: 'uniform float uSize; uniform float uScale; attribute vec3 color; varying vec3 vC;\n' +
-      'void main() { vC = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize * uScale / -mv.z; gl_Position = projectionMatrix * mv; }',
-    fragmentShader: 'varying vec3 vC;\n' +
-      'void main() { float d = length(gl_PointCoord - 0.5) * 2.0; if (d > 1.0) discard;\n' +
-      '  vec3 fill = mix(vec3(1.0), vC, smoothstep(0.22, 0.62, d));\n' +
-      '  float rim = smoothstep(0.72, 0.8, d);\n' +
-      '  gl_FragColor = vec4(mix(fill, vec3(0.1, 0.0, 0.07), rim), 1.0 - smoothstep(0.92, 1.0, d) * 0.9); }',
-    transparent: true, depthWrite: false, depthTest: false,
+  const mk = (glow) => new THREE.ShaderMaterial({
+    uniforms: { uSize: { value: size }, uScale: pointScale, uGlow: { value: glow ? 2.6 : 1 }, uTime: _ebTime },
+    vertexShader: _EB_VS, fragmentShader: glow ? _EB_GFS : _EB_FS,
+    transparent: true, depthWrite: false, depthTest: false, blending: glow ? THREE.AdditiveBlending : THREE.NormalBlending,
   });
-  const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; pts.renderOrder = 22;
-  return { pts, geo, pos, col, max, hitR, n: 0,
+  const pts = new THREE.Points(geo, mk(false)); pts.frustumCulled = false; pts.renderOrder = 22;
+  const glowPts = new THREE.Points(geo, mk(true)); glowPts.frustumCulled = false; glowPts.renderOrder = 21;
+  return { pts, glowPts, geo, pos, col, shp, ang, max, hitR, n: 0,
     x: new Float32Array(max), z: new Float32Array(max), vx: new Float32Array(max), vz: new Float32Array(max),
-    acc: new Float32Array(max), gz: new Uint8Array(max) };
+    acc: new Float32Array(max), gz: new Uint8Array(max), sh: new Uint8Array(max) };
 }
-const EB_COL = { pink: [1, 0.25, 0.75], orange: [1, 0.55, 0.1], red: [1, 0.18, 0.2], violet: [0.7, 0.35, 1] };
-function ebFire(big, x, z, ang, speed, color, acc) {
+const EB_COL = { pink: [1, 0.25, 0.75], orange: [1, 0.55, 0.1], red: [1, 0.18, 0.2], violet: [0.7, 0.35, 1], gold: [1, 0.8, 0.2], cyan: [0.2, 0.85, 1] };
+const EB_ORB = 0, EB_NEEDLE = 1, EB_STAR = 2;
+function ebFire(big, x, z, ang, speed, color, acc, shape) {
   const P = big ? A.ebL : A.ebS;
   if (!P || P.n >= P.max) return;
   const i = P.n++;
-  P.x[i] = x; P.z[i] = z; P.vx[i] = Math.sin(ang) * speed; P.vz[i] = Math.cos(ang) * speed; P.acc[i] = acc || 0; P.gz[i] = 0;
+  P.x[i] = x; P.z[i] = z; P.vx[i] = Math.sin(ang) * speed; P.vz[i] = Math.cos(ang) * speed; P.acc[i] = acc || 0; P.gz[i] = 0; P.sh[i] = shape || 0;
   const c = EB_COL[color] || EB_COL.pink;
   P.col[i * 3] = c[0]; P.col[i * 3 + 1] = c[1]; P.col[i * 3 + 2] = c[2];
 }
 const airAngTo = (x, z) => Math.atan2(spy.planeX - x, spy.planeZ - z);   // 0 = hacia abajo (+z)
-function ebAimed(big, x, z, speed, n, spread, color) {
+function ebAimed(big, x, z, speed, n, spread, color, shape) {
   const a0 = airAngTo(x, z);
-  for (let k = 0; k < n; k++) ebFire(big, x, z, a0 + (n > 1 ? (k / (n - 1) - 0.5) * spread : 0), speed, color);
+  for (let k = 0; k < n; k++) ebFire(big, x, z, a0 + (n > 1 ? (k / (n - 1) - 0.5) * spread : 0), speed, color, 0, shape);
 }
-function ebRing(big, x, z, speed, n, off, color) {
-  for (let k = 0; k < n; k++) ebFire(big, x, z, off + k / n * Math.PI * 2, speed, color);
+function ebRing(big, x, z, speed, n, off, color, shape) {
+  for (let k = 0; k < n; k++) ebFire(big, x, z, off + k / n * Math.PI * 2, speed, color, 0, shape);
 }
 function _ebRemove(P, i) {
   const j = --P.n;
-  P.x[i] = P.x[j]; P.z[i] = P.z[j]; P.vx[i] = P.vx[j]; P.vz[i] = P.vz[j]; P.acc[i] = P.acc[j]; P.gz[i] = P.gz[j];
+  P.x[i] = P.x[j]; P.z[i] = P.z[j]; P.vx[i] = P.vx[j]; P.vz[i] = P.vz[j]; P.acc[i] = P.acc[j]; P.gz[i] = P.gz[j]; P.sh[i] = P.sh[j];
   P.col[i * 3] = P.col[j * 3]; P.col[i * 3 + 1] = P.col[j * 3 + 1]; P.col[i * 3 + 2] = P.col[j * 3 + 2];
 }
 function ebUpdate(P, dt) {
@@ -12574,9 +12608,13 @@ function ebUpdate(P, dt) {
       if (!P.gz[i]) { P.gz[i] = 1; airGraze(x, z); }
     }
   }
-  for (let i = 0; i < P.n; i++) { P.pos[i * 3] = P.x[i]; P.pos[i * 3 + 1] = SPY.AIR_Y + 0.3; P.pos[i * 3 + 2] = P.z[i]; }
+  for (let i = 0; i < P.n; i++) {
+    P.pos[i * 3] = P.x[i]; P.pos[i * 3 + 1] = SPY.AIR_Y + 0.3; P.pos[i * 3 + 2] = P.z[i];
+    P.shp[i] = P.sh[i]; P.ang[i] = Math.atan2(P.vx[i], -P.vz[i]);   // ángulo en pantalla (arriba = -z)
+  }
   P.geo.setDrawRange(0, P.n);
-  P.geo.attributes.position.needsUpdate = true; P.geo.attributes.color.needsUpdate = true;
+  const at = P.geo.attributes;
+  at.position.needsUpdate = at.color.needsUpdate = at.aShape.needsUpdate = at.aAng.needsUpdate = true;
 }
 /* cancelar balas (bomba, fin del jefe): cada una da puntos y un destello */
 function ebCancel(points) {
@@ -12766,6 +12804,9 @@ function _airPlayerExtras() {
   A.muz = [0, 1].map(() => { const m = new THREE.Mesh(_fxGeo.quad, flashMat()); m.renderOrder = 20; m.visible = false; A.root.add(m); return m; });
   A.sparks = [];
   for (let i = 0; i < 16; i++) { const m = new THREE.Mesh(_fxGeo.quad, flashMat()); m.renderOrder = 19; m.visible = false; A.root.add(m); A.sparks.push({ m, t: 1 }); }
+  // fogonazos del jefe
+  A.flares = [];
+  for (let i = 0; i < 14; i++) { const m = new THREE.Mesh(_fxGeo.quad, flashMat()); m.renderOrder = 19; m.visible = false; A.root.add(m); A.flares.push({ m, t: 1, life: 0.14, s: 1 }); }
   // onda de la bomba
   A.bombFx = new THREE.Mesh(G.ring, new THREE.MeshBasicMaterial({ color: 0x7df9ff, transparent: true, opacity: 0, depthTest: false, depthWrite: false, toneMapped: false }));
   A.bombFx.renderOrder = 19; A.bombFx.visible = false; A.bombFx.userData.t = 9;
@@ -12784,6 +12825,12 @@ function airSpark(x, z, focus) {
   sp.m.material.color.setHex(focus ? 0xbff4ff : 0xfff0b0);
 }
 function _airBoomsTick(dt) {
+  if (A.flares) for (const f of A.flares) {
+    if (f.t >= 1) continue;
+    f.t = Math.min(1, f.t + dt / f.life);
+    f.m.scale.setScalar(f.s * (0.7 + 0.5 * f.t)); f.m.material.opacity = 1 - f.t * f.t;
+    if (f.t >= 1) f.m.visible = false;
+  }
   for (const b of A.booms) {
     if (b.t >= 1) continue;
     b.t = Math.min(1, b.t + dt / (0.32 + b.size * 0.06));
@@ -13292,11 +13339,12 @@ function airEnemiesTick(dt) {
     if (onScreen && !near && spy.phase === 'air') {
       e.fireT -= dt;
       if (e.fireT <= 0) {
-        if (e.kind === 'fighter' && e.shots < 2) { e.shots++; e.fireT = rand(1.4, 2.4); ebAimed(false, e.x, e.z + 1.5, 21, 1, 0, 'pink'); }
+        if (e.kind === 'fighter' && e.shots < 2) { e.shots++; e.fireT = rand(1.4, 2.4); ebAimed(false, e.x, e.z + 1.5, 21, 1, 0, 'pink', EB_NEEDLE); airFlare(e.x, e.z + 1.8, 1.8, 0xffa0d0, 0.07); }
         else if (e.kind === 'gun') {
           e.shots++; e.fireT = 1.35;
-          if (e.shots % 3 === 0) ebRing(true, e.x, e.z, 15, 14, e.t, 'violet');
-          else ebAimed(false, e.x, e.z + 2.5, 22, 5, 0.5, 'orange');
+          if (e.shots % 3 === 0) ebRing(true, e.x, e.z, 15, 14, e.t, 'violet', EB_ORB);
+          else ebAimed(false, e.x, e.z + 2.5, 22, 5, 0.5, 'orange', EB_NEEDLE);
+          airFlare(e.x, e.z + 2.5, 3, 0xffc080, 0.1);
         } else e.fireT = 99;
       }
     }
@@ -13466,24 +13514,61 @@ function bossHitAt(x, z, r, dmg, missile) {
   return false;
 }
 /* ataque: franja vertical avisada (rayo) */
-function bossBeam(x, warn) {
-  const fb = A.fb;
-  const m = new THREE.Mesh(airGeo().glow, new THREE.MeshBasicMaterial({ color: 0xff2040, transparent: true, opacity: 0.2, depthTest: false, depthWrite: false, toneMapped: false }));
-  m.renderOrder = 14;
-  m.scale.set(0.35, 1, fb.H + 20);
-  m.position.set(x, SPY.AIR_Y + 0.2, A.boss.z + (fb.zB - A.boss.z) / 2 + 6);
-  A.root.add(m);
-  A.hazards.push({ type: 'beam', mesh: m, x, t: 0, warn: warn || 1.1, dur: 0.55, w: 1.7, hit: false });
+/* textura del rayo: núcleo blanco, bordes de color y vetas de energía que se desplazan */
+const _beamTex = (() => {
+  const t = _fxCanvas(64, 256, (g, w, h) => {
+    const gr = g.createLinearGradient(0, 0, w, 0);
+    gr.addColorStop(0, 'rgba(255,40,80,0)'); gr.addColorStop(0.18, 'rgba(255,40,90,0.85)'); gr.addColorStop(0.36, 'rgba(255,150,190,1)');
+    gr.addColorStop(0.5, '#ffffff'); gr.addColorStop(0.64, 'rgba(255,150,190,1)'); gr.addColorStop(0.82, 'rgba(255,40,90,0.85)'); gr.addColorStop(1, 'rgba(255,40,80,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 26; i++) { g.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.35})`; g.fillRect(w * (0.25 + Math.random() * 0.5), Math.random() * h, 1 + Math.random() * 3, 10 + Math.random() * 50); }
+  });
+  t.wrapT = THREE.RepeatWrapping; return t;
+})();
+const _reticleTex = _fxCanvas(256, 256, (g, w) => {
+  const c = w / 2;
+  g.strokeStyle = '#ffffff'; g.lineCap = 'round';
+  g.lineWidth = 10; g.beginPath(); g.arc(c, c, c - 14, 0, Math.PI * 2); g.stroke();
+  g.lineWidth = 6; g.setLineDash([18, 14]); g.beginPath(); g.arc(c, c, c * 0.62, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+  g.lineWidth = 12;
+  for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; g.beginPath(); g.moveTo(c + Math.cos(a) * (c - 6), c + Math.sin(a) * (c - 6)); g.lineTo(c + Math.cos(a) * c * 0.72, c + Math.sin(a) * c * 0.72); g.stroke(); }
+  g.lineWidth = 6; g.beginPath(); g.moveTo(c - 18, c); g.lineTo(c + 18, c); g.moveTo(c, c - 18); g.lineTo(c, c + 18); g.stroke();
+});
+const _hzGeo = (() => { const g = new THREE.PlaneGeometry(1, 1); g.rotateX(-Math.PI / 2); g.translate(0, 0, 0.5); return g; })();
+const _hzMat = (o) => new THREE.MeshBasicMaterial(Object.assign({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false }, o));
+/* fogonazos del jefe (cañones, proa, núcleo): pool fijo */
+function airFlare(x, z, size, color, life) {
+  const f = A.flares.find(o => o.t >= 1) || A.flares[0];
+  f.t = 0; f.life = life || 0.14; f.s = size;
+  f.m.visible = true; f.m.position.set(x, SPY.AIR_Y + 1.2, z); f.m.rotation.y = Math.random() * Math.PI;
+  f.m.material.color.setHex(color || 0xffffff);
 }
-/* ataque: zona de bombardeo circular avisada */
+/* rayo: sale de (ox, oz) hacia la columna tx; línea de aviso mientras carga y luego un haz grueso */
+function bossBeam(tx, warn, ox, oz) {
+  const fb = A.fb, B = A.boss;
+  ox = ox == null ? B.x : ox; oz = oz == null ? B.z + ((spy.boss && spy.boss.noseZ) || 10) * B.s - 1 : oz;
+  const ex = tx, ez = fb.zB + 8, L = Math.hypot(ex - ox, ez - oz);
+  const g = new THREE.Group(); g.position.set(ox, SPY.AIR_Y + 0.4, oz); g.rotation.y = Math.atan2(ex - ox, ez - oz);
+  const line = new THREE.Mesh(_hzGeo, _hzMat({ color: 0xff2a4a, opacity: 0.6 })); line.scale.set(0.16, 1, L); line.renderOrder = 14;
+  const glow = new THREE.Mesh(_hzGeo, _hzMat({ map: _beamTex, color: 0xff2a5a, opacity: 0, blending: THREE.AdditiveBlending })); glow.scale.set(0.01, 1, L); glow.renderOrder = 15;
+  const core = new THREE.Mesh(_hzGeo, _hzMat({ map: _beamTex.clone(), opacity: 0 })); core.scale.set(0.01, 1, L); core.renderOrder = 16;
+  core.material.map.wrapT = THREE.RepeatWrapping; core.material.map.repeat.set(1, L / 12); core.material.map.needsUpdate = true;
+  const orb = new THREE.Mesh(_fxGeo.quad, _hzMat({ map: _fxFlashTex, color: 0xff6a8a, opacity: 0, blending: THREE.AdditiveBlending })); orb.renderOrder = 17;
+  orb.position.set(ox, SPY.AIR_Y + 1.4, oz);
+  g.add(line, glow, core);
+  A.root.add(g, orb);
+  A.hazards.push({ type: 'beam', g, line, glow, core, orb, ox, oz, ex, ez, L, t: 0, warn: warn || 1.1, dur: 0.65, w: 1.6, hit: false });
+}
+/* bombardeo: retículo que gira + proyectil de mortero que viaja en arco desde el jefe */
 function bossBlast(x, z, r) {
-  const G = airGeo();
-  const m = new THREE.Mesh(G.disc, new THREE.MeshBasicMaterial({ color: 0xff7a00, transparent: true, opacity: 0.18, depthTest: false, depthWrite: false, toneMapped: false }));
-  const ring = new THREE.Mesh(G.ring, new THREE.MeshBasicMaterial({ color: 0xff3b1a, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, toneMapped: false }));
-  m.scale.setScalar(r); ring.scale.setScalar(r); m.renderOrder = 13; ring.renderOrder = 13;
-  m.position.set(x, SPY.AIR_Y + 0.1, z); ring.position.set(x, SPY.AIR_Y + 0.15, z);
-  A.root.add(m, ring);
-  A.hazards.push({ type: 'blast', mesh: m, ring, x, z, r, t: 0, warn: 1.25, dur: 0.35, hit: false });
+  const B = A.boss;
+  const ret = new THREE.Mesh(_fxGeo.quad, _hzMat({ map: _reticleTex, color: 0xff5a2a, opacity: 0.9 })); ret.renderOrder = 13;
+  const fill = new THREE.Mesh(airGeo().disc, _hzMat({ color: 0xff7a00, opacity: 0.12 })); fill.renderOrder = 12;
+  ret.position.set(x, SPY.AIR_Y + 0.15, z); fill.position.set(x, SPY.AIR_Y + 0.1, z);
+  const shell = new THREE.Mesh(_fxGeo.quad, _hzMat({ map: _fxFlashTex, color: 0xffa040, opacity: 1, blending: THREE.AdditiveBlending })); shell.renderOrder = 18;
+  A.root.add(ret, fill, shell);
+  const sx = B ? B.x : x, sz = B ? B.z + 4 * B.s : z - 30;
+  A.hazards.push({ type: 'blast', ret, fill, shell, sx, sz, x, z, r, t: 0, warn: 1.3, dur: 0.35, hit: false });
 }
 function airHazardsTick(dt) {
   for (let i = A.hazards.length - 1; i >= 0; i--) {
@@ -13492,30 +13577,60 @@ function airHazardsTick(dt) {
     const live = spy.phase === 'boss' && !h.cancel;
     if (h.type === 'beam') {
       if (h.t < h.warn) {
-        h.mesh.scale.x = 0.25 + Math.sin(h.t * 30) * 0.08 + h.t / h.warn * 0.4;
-        h.mesh.material.opacity = 0.35 + 0.25 * Math.sin(h.t * 24);
+        const k = h.t / h.warn;
+        h.line.material.opacity = (0.35 + 0.4 * k) * (Math.floor(h.t * 16) % 2 ? 1 : 0.55);
+        h.line.scale.x = 0.12 + 0.25 * k;
+        // el emisor se carga: destello que crece y chispas que convergen
+        h.orb.material.opacity = 0.5 + 0.5 * k; h.orb.scale.setScalar(1.5 + 4.5 * k * k + Math.sin(h.t * 40) * 0.3);
+        if (Math.random() < 0.7) { const a = Math.random() * Math.PI * 2, d = 4 + Math.random() * 3; burst(h.ox + Math.cos(a) * d, SPY.AIR_Y + 1, h.oz + Math.sin(a) * d, 1, { colors: [[1, 0.4, 0.6], [1, 1, 1]], speed: 1, up: 0, life: 0.25, size: 0.4, spread: 0.1, grav: 0 }); }
       } else {
         const k = (h.t - h.warn) / h.dur;
-        h.mesh.scale.x = h.w * 2 * (k < 0.15 ? k / 0.15 : 1 - Math.max(0, k - 0.7) / 0.3);
-        h.mesh.material.color.setHex(0xfff0f4); h.mesh.material.opacity = 0.95;
-        if (!h.fired) { h.fired = true; shake = Math.max(shake, 0.5); if (AudioSys.ready) AudioSys.tone(220, 0.5, { type: 'sawtooth', vol: 0.08, to: 110 }); }
-        if (live && !h.hit && k < 0.85 && Math.abs(spy.planeX - h.x) < h.w + AIR.HIT_R * 0.6) { h.hit = true; airHurt(AIR.DMG_BEAM); }
-        if (Math.random() < 0.5) burst(h.x, SPY.AIR_Y, spy.planeZ + rand(-20, 10), 1, { colors: [[1, 0.3, 0.4], [1, 1, 1]], speed: 3, up: 1, life: 0.25, size: 0.5, spread: 0.4, grav: 0 });
+        const env = k < 0.12 ? (k / 0.12) * 1.25 : k < 0.2 ? 1.25 - (k - 0.12) / 0.08 * 0.25 : k < 0.75 ? 1 + Math.sin(h.t * 50) * 0.06 : Math.max(0, 1 - (k - 0.75) / 0.25);
+        h.line.material.opacity = 0;
+        h.core.scale.x = h.w * 2.2 * env; h.core.material.opacity = 1;
+        h.glow.scale.x = h.w * 7 * env; h.glow.material.opacity = 0.75;
+        h.core.material.map.offset.y -= dt * 6; h.glow.material.map.offset.y -= dt * 3;
+        h.orb.scale.setScalar(6 + Math.sin(h.t * 60)); h.orb.material.opacity = env;
+        if (!h.fired) {
+          h.fired = true; shake = Math.max(shake, 0.8); airRumble(200, 0.5, 0.6);
+          if (AudioSys.ready) { AudioSys.tone(160, 0.6, { type: 'sawtooth', vol: 0.09, to: 90 }); AudioSys.tone(900, 0.4, { type: 'square', vol: 0.02, to: 300 }); }
+        }
+        // daño: distancia del avión al segmento del rayo
+        if (live && !h.hit && k < 0.85) {
+          const vx = h.ex - h.ox, vz = h.ez - h.oz, u = clamp(((spy.planeX - h.ox) * vx + (spy.planeZ - h.oz) * vz) / (vx * vx + vz * vz), 0, 1);
+          const dx = spy.planeX - (h.ox + vx * u), dz = spy.planeZ - (h.oz + vz * u);
+          if (dx * dx + dz * dz < (h.w * env + AIR.HIT_R * 0.6) ** 2) { h.hit = true; airHurt(AIR.DMG_BEAM); }
+        }
+        // chispas a lo largo del rayo
+        for (let n = 0; n < 2; n++) { const u = Math.random(); burst(h.ox + (h.ex - h.ox) * u + rand(-1, 1), SPY.AIR_Y + 0.5, h.oz + (h.ez - h.oz) * u, 1, { colors: [[1, 0.35, 0.55], [1, 1, 1], [1, 0.8, 0.9]], speed: 6, up: 2, life: 0.3, size: 0.5, spread: 0.3, grav: 0 }); }
       }
-      if (h.t >= h.warn + h.dur || h.cancel) { A.root.remove(h.mesh); A.hazards.splice(i, 1); }
+      if (h.t >= h.warn + h.dur || h.cancel) { A.root.remove(h.g, h.orb); h.core.material.map.dispose(); A.hazards.splice(i, 1); }
     } else {
       if (h.t < h.warn) {
         const k = h.t / h.warn;
-        h.ring.scale.setScalar(h.r * (1.6 - 0.6 * k));
-        h.mesh.material.opacity = 0.14 + 0.2 * k + 0.08 * Math.sin(h.t * 22);
+        h.ret.rotation.y += dt * (2 + 4 * k);
+        h.ret.scale.setScalar(h.r * 2.3 * (1.5 - 0.5 * k));
+        h.ret.material.opacity = 0.6 + 0.4 * (Math.floor(h.t * (6 + 10 * k)) % 2);
+        h.fill.scale.setScalar(h.r * k); h.fill.material.opacity = 0.12 + 0.25 * k;
+        // el proyectil viaja desde el jefe en arco (sube hacia la cámara y cae)
+        const e = k * k * (3 - 2 * k), arc = Math.sin(Math.PI * k);
+        h.shell.position.set(lerp(h.sx, h.x, e), SPY.AIR_Y + 1 + arc * 16, lerp(h.sz, h.z, e));
+        h.shell.scale.setScalar(2.2 + arc * 2.4); h.shell.rotation.y += dt * 8;
+        if (Math.random() < 0.8) burst(h.shell.position.x, h.shell.position.y, h.shell.position.z, 1, { colors: [[1, 0.6, 0.2], [0.6, 0.6, 0.65]], speed: 1, up: 0.5, life: 0.45, size: 0.6, spread: 0.1, grav: 0 });
       } else if (!h.fired) {
         h.fired = true;
+        h.shell.visible = false; h.ret.visible = false;
         if (!h.cancel) {
-          airBoom(h.x, h.z, h.r * 0.9, [[1, 0.6, 0.1], [1, 0.25, 0], [0.3, 0.2, 0.2]]);
+          airBoom(h.x, h.z, h.r * 1.15, [[1, 0.7, 0.2], [1, 0.3, 0], [1, 1, 0.7], [0.3, 0.2, 0.2]]);
+          airFlare(h.x, h.z, h.r * 3.2, 0xffd08a, 0.22);
+          shake = Math.max(shake, 0.6);
+          if (AudioSys.ready) AudioSys.play('crash', { vol: 0.35, rate: rand(0.8, 1) });
           if (live && (spy.planeX - h.x) ** 2 + (spy.planeZ - h.z) ** 2 < (h.r + AIR.HIT_R * 0.5) ** 2) airHurt(AIR.DMG_BLAST);
         }
+      } else {
+        h.fill.material.opacity *= Math.exp(-dt * 10);
       }
-      if (h.t >= h.warn + h.dur || h.cancel) { A.root.remove(h.mesh, h.ring); A.hazards.splice(i, 1); }
+      if (h.t >= h.warn + h.dur || h.cancel) { A.root.remove(h.ret, h.fill, h.shell); A.hazards.splice(i, 1); }
     }
   }
 }
@@ -13562,14 +13677,26 @@ function airBossTick(dt) {
   if (sb.core.material.color) sb.core.material.color.setHex(B.phase === 3 && Math.floor(B.t * 8) % 2 ? 0xffffff : 0xff3a2a);
   // destello de impacto en la nave
   const fl = Math.max(B.flash[0], B.flash[1], B.flash[2]);
-  for (let i = 0; i < 3; i++) B.flash[i] = Math.max(0, B.flash[i] - dt * 10);
-  for (const m of B.mats) { m.emissive.setHex(fl > 0.01 ? 0xffffff : m.userData.e0.c); m.emissiveIntensity = fl > 0.01 ? fl * 0.35 : m.userData.e0.i; }
+  for (let i = 0; i < 3; i++) B.flash[i] = Math.max(0, B.flash[i] - dt * 16);
+  for (const m of B.mats) { m.emissive.setHex(fl > 0.01 ? 0xffffff : m.userData.e0.c); m.emissiveIntensity = fl > 0.01 ? fl * 0.14 : m.userData.e0.i; }
   if (B.intro > 0 || B.dying || spy.phase !== 'boss') return;
 
   /* patrones */
   const rate = B.phase === 3 ? 0.7 : 1;
+  const coreX = B.x, coreZ = B.z - 1.5 * s;
+  const noseX = B.x, noseZ = B.z + ((sb.noseZ || 10) - 0.5) * s;
   B.atkT -= dt;
-  // espiral continua del núcleo (fases 2 y 3)
+  // carga: el punto de disparo brilla cada vez más antes de un ataque grande
+  if (B.charge) {
+    const C = B.charge;
+    C.t += dt;
+    const k = Math.min(1, C.t / C.dur), cx = C.at === 'nose' ? noseX : coreX, cz = C.at === 'nose' ? noseZ : coreZ;
+    if (Math.random() < 0.5 + k) airFlare(cx, cz, 1.5 + 4 * k * k, C.color, 0.08);
+    if (Math.random() < 0.8) { const a = Math.random() * Math.PI * 2, d = 5 + Math.random() * 3; burst(cx + Math.cos(a) * d, SPY.AIR_Y + 1, cz + Math.sin(a) * d, 1, { colors: [[1, 1, 1], [1, 0.5, 0.8]], speed: 1, up: 0, life: 0.22, size: 0.45, spread: 0.1, grav: 0 }); }
+    if (C.t >= C.dur) { B.charge = null; airFlare(cx, cz, 7, C.color, 0.2); C.fn(cx, cz); }
+    return;
+  }
+  // espiral continua del núcleo (fases 2 y 3): estrellas giratorias
   if (B.spiral > 0) {
     B.spiral -= dt;
     B.spiralT = (B.spiralT || 0) - dt;
@@ -13577,40 +13704,62 @@ function airBossTick(dt) {
       B.spiralT = B.phase === 3 ? 0.075 : 0.1;
       B.spiralA += B.phase === 3 ? 0.31 : 0.26;
       const arms = B.phase === 3 ? 4 : 3;
-      for (let k = 0; k < arms; k++) ebFire(false, B.x, B.z - 1.5 * s, B.spiralA + k * Math.PI * 2 / arms, 15, 'pink');
+      for (let k = 0; k < arms; k++) ebFire(false, coreX, coreZ, B.spiralA + k * Math.PI * 2 / arms, 15, 'pink', 0, EB_STAR);
+      if (Math.random() < 0.5) airFlare(coreX, coreZ, 3.2, 0xff6ad5, 0.08);
     }
   }
-  // ráfagas de las torretas (fase 1)
+  // ráfagas de las torretas (fase 1): agujas con fogonazo en cada cañón
   if (B.burst > 0) {
     B.burstT = (B.burstT || 0) - dt;
     if (B.burstT <= 0) {
       B.burstT = 0.12; B.burst--;
       sb.turrets.forEach((t, i) => {
         if (!t.alive) return;
-        const a = t.barrel.rotation.y, tx = B.x + B.tx[i] * s + Math.sin(a) * 4 * s, tz = B.z + s + Math.cos(a) * 4 * s;
-        ebAimed(false, tx, tz, 27, 1, 0, 'red');
+        const a = t.barrel.rotation.y, tx = B.x + B.tx[i] * s + Math.sin(a) * 4.4 * s, tz = B.z + s + Math.cos(a) * 4.4 * s;
+        ebAimed(false, tx, tz, 28, 1, 0, 'red', EB_NEEDLE);
+        airFlare(tx, tz, 3, 0xffc090, 0.09);
       });
+      if (AudioSys.ready) AudioSys.tone(260, 0.06, { type: 'square', vol: 0.025, to: 120 });
     }
   }
   if (B.atkT > 0) return;
   const step = B.step++;
-  const noseX = B.x, noseZ = B.z + ((sb.noseZ || 10) - 0.5) * s;
+  const charge = (at, dur, color, fn) => { B.charge = { at, dur, color, fn, t: 0 }; if (AudioSys.ready) AudioSys.tone(140, dur, { type: 'sine', vol: 0.06, to: 520 }); };
   if (B.phase === 1) {
     const k = step % 4;
     if (k === 0 || k === 2) { B.burst = 3; B.atkT = 1.3; }
-    else if (k === 1) { for (let n = 0; n < 9; n++) ebFire(true, noseX, noseZ, (n / 8 - 0.5) * 1.3, 16, 'orange'); B.atkT = 1.6; }
-    else { if (B.t > 6) bossBeam(spy.planeX); else B.burst = 3; B.atkT = 1.8; }
+    else if (k === 1) {
+      // abanico de plasma desde la proa, tras cargar
+      charge('nose', 0.5, 0xffa040, (x, z) => { for (let n = 0; n < 9; n++) ebFire(true, x, z, (n / 8 - 0.5) * 1.3, 16, 'orange', 0, EB_ORB); shake = Math.max(shake, 0.3); });
+      B.atkT = 2.1;
+    }
+    else { if (B.t > 6) bossBeam(spy.planeX); else B.burst = 3; B.atkT = 1.9; }
   } else {
     const k = step % 5;
-    if (k === 0) { B.spiral = 2.6; B.atkT = 3.0 * rate; }
-    else if (k === 1) { ebAimed(false, B.x, B.z, 25, 5, 0.6, 'red'); setTimeout(() => { if (A.boss === B && !B.dying && spy.phase === 'boss') ebAimed(false, B.x, B.z, 25, 5, 0.6, 'red'); }, 220); B.atkT = 1.1 * rate; }
+    if (k === 0) { charge('core', 0.45, 0xff6ad5, () => { B.spiral = 2.6; }); B.atkT = 3.4 * rate; }
+    else if (k === 1) {
+      const fan = () => ebAimed(false, coreX, coreZ, 26, 5, 0.6, 'red', EB_NEEDLE);
+      fan(); airFlare(coreX, coreZ, 4, 0xff8090, 0.1);
+      setTimeout(() => { if (A.boss === B && !B.dying && spy.phase === 'boss') { ebAimed(false, B.x, B.z - 1.5 * B.s, 26, 5, 0.6, 'red', EB_NEEDLE); airFlare(B.x, B.z - 1.5 * B.s, 4, 0xff8090, 0.1); } }, 220);
+      B.atkT = 1.1 * rate;
+    }
     else if (k === 2) {
       bossBlast(spy.planeX, spy.planeZ, 3.6);
       for (let n = 0; n < (B.phase === 3 ? 3 : 2); n++) bossBlast(rand(-fb.hw + 4, fb.hw - 4), rand(B.z + 14 * s, fb.zB - 6), 3.6);
-      B.atkT = 1.6 * rate;
+      airFlare(noseX, noseZ, 5, 0xffa040, 0.15);
+      B.atkT = 1.7 * rate;
     }
-    else if (k === 3) { ebRing(true, B.x, B.z - 1.5 * s, 13, B.phase === 3 ? 22 : 16, B.t, 'violet'); B.atkT = 1.2 * rate; }
-    else { bossBeam(spy.planeX - 7, 1.0); bossBeam(spy.planeX + 7, 1.0); if (B.phase === 3) setTimeout(() => { if (A.boss === B && !B.dying && spy.phase === 'boss') bossBeam(spy.planeX, 0.9); }, 700); B.atkT = 2.0 * rate; }
+    else if (k === 3) {
+      // anillo de orbes tras cargar el núcleo
+      charge('core', 0.55, 0xb070ff, (x, z) => { ebRing(true, x, z, 13, B.phase === 3 ? 22 : 16, B.t, 'violet', EB_ORB); if (B.phase === 3) ebRing(false, x, z, 18, 12, B.t + 0.13, 'cyan', EB_NEEDLE); shake = Math.max(shake, 0.35); });
+      B.atkT = 1.8 * rate;
+    }
+    else {
+      // rayos gemelos desde el núcleo; en fase crítica, uno más al centro
+      bossBeam(spy.planeX - 7, 1.0, coreX, coreZ); bossBeam(spy.planeX + 7, 1.0, coreX, coreZ);
+      if (B.phase === 3) setTimeout(() => { if (A.boss === B && !B.dying && spy.phase === 'boss') bossBeam(spy.planeX, 0.9); }, 700);
+      B.atkT = 2.1 * rate;
+    }
   }
 }
 
@@ -13622,7 +13771,7 @@ function airEnsure() {
   // tamaño en metros: el shader usa pointScale (alto del lienzo / 2·tan(fov/2))
   A.ebS = _airBulletPool(600, 1.9, 0.55);
   A.ebL = _airBulletPool(220, 3.5, 1.15);
-  A.root.add(A.ebS.pts, A.ebL.pts);
+  A.root.add(A.ebS.glowPts, A.ebL.glowPts, A.ebS.pts, A.ebL.pts);
   A.shots = _airShots(); A.shots.ims.forEach(im => A.root.add(im));
   _airPlayerExtras();
 }
@@ -13631,7 +13780,8 @@ function airReset() {
     A.enemies.forEach(e => { A.root.remove(e.root); A.root.remove(e.m.shadow); });
     A.missiles.forEach(m => A.root.remove(m.mesh));
     A.items.forEach(it => A.root.remove(it.mesh));
-    A.hazards.forEach(h => { A.root.remove(h.mesh); if (h.ring) A.root.remove(h.ring); });
+    A.hazards.forEach(h => { [h.g, h.orb, h.ret, h.fill, h.shell, h.mesh, h.ring].forEach(o => { if (o) A.root.remove(o); }); });
+    if (A.flares) A.flares.forEach(f => { f.t = 1; f.m.visible = false; });
     if (A.ebS) { A.ebS.n = A.ebL.n = 0; A.ebS.geo.setDrawRange(0, 0); A.ebL.geo.setDrawRange(0, 0); }
     if (A.shots) { A.shots.n = 0; A.shots.ims.forEach(im => { im.count = 0; }); }
     if (A.sparks) A.sparks.forEach(sp => { sp.t = 1; sp.m.visible = false; });
@@ -13687,6 +13837,7 @@ function spyAirFrame(dt) {
   let gdt = dt;
   if (A.hitstop > 0) { A.hitstop -= dt; gdt = dt * 0.05; }
   A.t += gdt;
+  _ebTime.value = A.t;
   if (A.hintT > 0) A.hintT -= dt;
   if (A.chainT > 0) { A.chainT -= gdt; if (A.chainT <= 0) A.chain = 0; }
   if (spy.iframes > 0) spy.iframes -= dt;
