@@ -15124,21 +15124,23 @@ function airItemsTick(dt) {
 
 /* ---------- enemigos ---------- */
 const AIR_EN = {
-  fighter: { hp: 4, score: 100 },
-  kami:    { hp: 3, score: 150 },
-  gun:     { hp: 70, score: 1500, big: 3.2, heavy: true },
-  dart:    { hp: 2, score: 120 },                              // interceptor: rápido y en zigzag
-  bomber:  { hp: 26, score: 600, big: 2.5 },                   // ala volante: lenta, suelta bombas en abanico
-  sniper:  { hp: 12, score: 400, boom: 2.0 },                  // apunta con un láser y dispara una ráfaga recta
-  drone:   { hp: 2, score: 80, spin: true },                   // enjambre en anillo giratorio
-  strafer: { hp: 16, score: 500, big: 2.3, flat: true },       // cruza la pantalla de lado soltando una cortina
+  fighter: { hp: 9, score: 100 },
+  kami:    { hp: 8, score: 150 },
+  gun:     { hp: 190, score: 1500, big: 3.2, heavy: true },
+  dart:    { hp: 5, score: 120 },                              // interceptor: rápido y en zigzag
+  bomber:  { hp: 70, score: 600, big: 2.5 },                   // ala volante: lenta, suelta bombas en abanico
+  sniper:  { hp: 40, score: 400, boom: 2.0 },                  // apunta con un láser y dispara una ráfaga recta
+  drone:   { hp: 6, score: 80, spin: true },                   // enjambre en anillo giratorio
+  strafer: { hp: 60, score: 500, big: 2.3, flat: true },       // cruza la pantalla de lado soltando una cortina
 };
+/* 0 en la primera oleada, 1 en la última: las balas van más rápidas y los enemigos disparan más seguido */
+const airRank = () => clamp(A.waveIdx / (AIR_WAVES.length - 1), 0, 1);
 function airSpawn(kind, o) {
   const fb = A.fb;
   const m = buildAirEnemy(kind);
   const e = Object.assign({
     kind, m, root: m.root, r: m.r, hp: AIR_EN[kind].hp, max: AIR_EN[kind].hp, score: AIR_EN[kind].score,
-    t: 0, x: 0, z: fb.zT - 6, vx: 0, vz: 0, flash: 0, fireT: rand(0.8, 1.8), shots: 0, dead: false, group: null,
+    t: 0, x: 0, z: fb.zT - 6, vx: 0, vz: 0, flash: 0, fireT: rand(0.5, 1.3), shots: 0, dead: false, group: null,
     path: 'line', speed: 20, amp: 0, freq: 1, x0: 0, dir: 1,
   }, o);
   e.x0 = e.x;
@@ -15185,7 +15187,7 @@ function airSniperTick(e, dt, ok) {
   e.fireT -= dt;
   if (e.st === 0) {
     e.aim.visible = false;
-    if (e.fireT <= 0) { e.st = 1; e.fireT = 1.15; if (AudioSys.ready) AudioSys.tone(520, 0.5, { type: 'sine', vol: 0.03, to: 1500 }); }
+    if (e.fireT <= 0) { e.st = 1; e.fireT = 1.0; if (AudioSys.ready) AudioSys.tone(520, 0.5, { type: 'sine', vol: 0.03, to: 1500 }); }
     return;
   }
   const lock = e.st === 2;
@@ -15193,13 +15195,13 @@ function airSniperTick(e, dt, ok) {
   e.aim.position.set(mx, SPY.AIR_Y + 0.4, mz);
   e.aim.rotation.y = e.aimA;
   e.aim.scale.set(lock ? 0.75 : 0.28, 1, 120);
-  e.aim.material.opacity = lock ? (Math.floor(e.t * 24) % 2 ? 0.95 : 0.55) : 0.3 + 0.3 * (1 - e.fireT / 1.15);
+  e.aim.material.opacity = lock ? (Math.floor(e.t * 24) % 2 ? 0.95 : 0.55) : 0.3 + 0.3 * (1 - e.fireT / 1.0);
   if (e.fireT > 0) return;
   if (e.st === 1) { e.st = 2; e.fireT = 0.32; return; }
-  for (let k = 0; k < 4; k++) ebFire(false, mx, mz, e.aimA, 40 - k * 3.2, 'red', 0, EB_NEEDLE);
+  for (let k = 0; k < 5; k++) ebFire(false, mx, mz, e.aimA, 42 - k * 2.8, 'red', 0, EB_NEEDLE);
   airFlare(mx, mz, 2.6, 0xff80e0, 0.1);
   if (AudioSys.ready) AudioSys.tone(1400, 0.12, { type: 'sawtooth', vol: 0.035, to: 300 });
-  e.st = 0; e.fireT = 2.3; e.aim.visible = false;
+  e.st = 0; e.fireT = 1.9 - 0.4 * airRank(); e.aim.visible = false;
 }
 function airEnemiesTick(dt) {
   const fb = A.fb;
@@ -15229,7 +15231,7 @@ function airEnemiesTick(dt) {
         e.z += (stopZ - e.z) * (1 - Math.exp(-dt * 3));
         e.x += (spy.planeX - e.x) * (1 - Math.exp(-dt * 1.2));
         e.root.rotation.y = Math.atan2(spy.planeX - e.x, spy.planeZ - e.z);
-        if (t > 1.1) { e.state = 'go'; const a = airAngTo(e.x, e.z); e.vx = Math.sin(a) * 52; e.vz = Math.cos(a) * 52; }
+        if (t > 0.9) { e.state = 'go'; const a = airAngTo(e.x, e.z); e.vx = Math.sin(a) * 58; e.vz = Math.cos(a) * 58; }
       } else { e.x += e.vx * dt; e.z += e.vz * dt; }
     } else if (e.path === 'orbit') {
       // anillo que gira alrededor de un centro que baja despacio
@@ -15265,33 +15267,39 @@ function airEnemiesTick(dt) {
     if (e.m.body.userData.tur) e.m.body.userData.tur.rotation.y = clamp(airAngTo(e.x, e.z), -1.1, 1.1);
     // disparo (nunca a quemarropa ni fuera de pantalla)
     const onScreen = e.z > fb.zT + 2 && e.z < fb.zB - 6 && Math.abs(e.x) < fb.vis + 1;
-    const near = Math.abs(e.z - spy.planeZ) < 9;
+    const near = Math.abs(e.z - spy.planeZ) < 7;
     if (e.kind === 'sniper') airSniperTick(e, dt, onScreen && !near && spy.phase === 'air' && t < e.stay);
     else if (onScreen && !near && spy.phase === 'air') {
       e.fireT -= dt;
       if (e.fireT <= 0) {
-        if (e.kind === 'dart') {
-          if (e.shots < 1) { e.shots++; ebAimed(false, e.x, e.z + 1.5, 25, 1, 0, 'gold', EB_NEEDLE); airFlare(e.x, e.z + 1.8, 1.5, 0xfff0a0, 0.07); }
-          e.fireT = 99;
+        const rank = airRank(), bs = 1 + 0.18 * rank, fr = 1 - 0.2 * rank;
+        if (e.kind === 'fighter') {
+          if (e.shots < (rank < 0.25 ? 2 : 3)) {
+            e.shots++; e.fireT = rand(1.0, 1.7) * fr;
+            ebAimed(false, e.x, e.z + 1.5, 23 * bs, rank > 0.7 ? 2 : 1, 0.22, 'pink', EB_NEEDLE); airFlare(e.x, e.z + 1.8, 1.8, 0xffa0d0, 0.07);
+          } else e.fireT = 99;
+        } else if (e.kind === 'dart') {
+          if (e.shots < 2) { e.shots++; e.fireT = 0.7; ebAimed(false, e.x, e.z + 1.5, 27 * bs, 1, 0, 'gold', EB_NEEDLE); airFlare(e.x, e.z + 1.8, 1.5, 0xfff0a0, 0.07); }
+          else e.fireT = 99;
         } else if (e.kind === 'bomber') {
-          // bombas lentas en abanico hacia abajo: 3 y 2 alternando para dejar huecos
-          e.shots++; e.fireT = 1.7;
-          const fan = e.shots % 2 ? [-0.34, 0, 0.34] : [-0.17, 0.17];
-          for (const a of fan) ebFire(true, e.x + a * 6, e.z + 1.5, a, 12.5, 'orange', 0, EB_ORB);
+          // bombas lentas en abanico hacia abajo: 4 y 3 alternando para dejar huecos; cada cuatro, un par apuntado
+          e.shots++; e.fireT = 1.5 * fr;
+          const fan = e.shots % 2 ? [-0.45, -0.15, 0.15, 0.45] : [-0.3, 0, 0.3];
+          for (const a of fan) ebFire(true, e.x + a * 6, e.z + 1.5, a, 13 * bs, 'orange', 0, EB_ORB);
+          if (e.shots % 4 === 0) ebAimed(false, e.x, e.z + 2, 22 * bs, 2, 0.2, 'pink', EB_NEEDLE);
           airFlare(e.x, e.z + 1.5, 3, 0xffb060, 0.1);
         } else if (e.kind === 'drone') {
-          e.fireT = 3.2;
-          if (e.shots < 2) { e.shots++; ebAimed(false, e.x, e.z, 13.5, 1, 0, 'violet', EB_ORB); airFlare(e.x, e.z, 1.4, 0xd0a0ff, 0.07); }
+          e.fireT = 2.3 * fr;
+          if (e.shots < 2) { e.shots++; ebAimed(false, e.x, e.z, 15 * bs, 1, 0, 'violet', EB_ORB); airFlare(e.x, e.z, 1.4, 0xd0a0ff, 0.07); }
         } else if (e.kind === 'strafer') {
-          // cortina: tres bombas y un hueco para pasar
-          e.shots++; e.fireT = 0.3;
-          if (e.shots % 5 < 3) { ebFire(true, e.x, e.z + 1.2, 0, 14, 'orange', 0, EB_ORB); airFlare(e.x, e.z + 1.2, 1.6, 0xffb060, 0.06); }
-        } else
-        if (e.kind === 'fighter' && e.shots < 2) { e.shots++; e.fireT = rand(1.4, 2.4); ebAimed(false, e.x, e.z + 1.5, 21, 1, 0, 'pink', EB_NEEDLE); airFlare(e.x, e.z + 1.8, 1.8, 0xffa0d0, 0.07); }
-        else if (e.kind === 'gun') {
-          e.shots++; e.fireT = 1.35;
-          if (e.shots % 3 === 0) ebRing(true, e.x, e.z, 15, 14, e.t, 'violet', EB_ORB);
-          else ebAimed(false, e.x, e.z + 2.5, 22, 5, 0.5, 'orange', EB_NEEDLE);
+          // cortina: cuatro bombas y un hueco para pasar; de vez en cuando, un disparo apuntado
+          e.shots++; e.fireT = 0.24;
+          if (e.shots % 6 < 4) { ebFire(true, e.x, e.z + 1.2, 0, 15 * bs, 'orange', 0, EB_ORB); airFlare(e.x, e.z + 1.2, 1.6, 0xffb060, 0.06); }
+          if (e.shots % 8 === 0) ebAimed(false, e.x, e.z + 1.2, 22 * bs, 1, 0, 'pink', EB_NEEDLE);
+        } else if (e.kind === 'gun') {
+          e.shots++; e.fireT = 1.1 * fr;
+          if (e.shots % 3 === 0) ebRing(true, e.x, e.z, 15 * bs, 18, e.t, 'violet', EB_ORB);
+          else ebAimed(false, e.x, e.z + 2.5, 23 * bs, 7, 0.75, 'orange', EB_NEEDLE);
           airFlare(e.x, e.z + 2.5, 3, 0xffc080, 0.1);
         } else e.fireT = 99;
       }
@@ -15313,51 +15321,65 @@ function airEnemiesTick(dt) {
 /* ---------- guion de oleadas (posiciones relativas al campo: x en [-1,1] × hw) ---------- */
 const AIR_WAVES = [
   { name: 'WAVE 1', sub: 'bandits incoming', ev: [
-    ...[0, 1, 2, 3, 4].map(k => ({ t: k * 0.32, kind: 'fighter', x: -0.5, path: 'line', speed: 19, amp: 3, freq: 1.4, g: 'a' })),
-    ...[0, 1, 2, 3, 4].map(k => ({ t: 2.4 + k * 0.32, kind: 'fighter', x: 0.5, path: 'line', speed: 19, amp: 3, freq: 1.4, g: 'b' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 0 + k * 0.32, kind: 'fighter', x: -0.5, path: 'line', speed: 19, amp: 3, freq: 1.4, g: 'a' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 2.2 + k * 0.32, kind: 'fighter', x: 0.5, path: 'line', speed: 19, amp: 3, freq: 1.4, g: 'b' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 4.4 + k * 0.32, kind: 'fighter', x: 0, path: 'line', speed: 18, amp: 6, freq: 1.2, g: 'c' })),
   ] },
   { name: 'WAVE 2', sub: 'interceptors', ev: [
-    ...[0, 1, 2, 3].map(k => ({ t: k * 0.3, kind: 'dart', x: -0.35, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, g: 'a' })),
-    ...[0, 1, 2, 3].map(k => ({ t: 2.2 + k * 0.3, kind: 'dart', x: 0.35, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, dir: -1, g: 'b' })),
-    ...[-2, -1, 0, 1, 2].map(k => ({ t: 4.4 + Math.abs(k) * 0.18, kind: 'fighter', x: k * 0.13, path: 'line', speed: 15, amp: 0, g: 'v' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 0 + k * 0.3, kind: 'dart', x: -0.35, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, g: 'a' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 1.8 + k * 0.3, kind: 'dart', x: 0.35, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, dir: -1, g: 'b' })),
+    ...[-3, -2, -1, 0, 1, 2, 3].map(k => ({ t: 3.6 + Math.abs(k) * 0.18, kind: 'fighter', x: k * 0.12, path: 'line', speed: 15, amp: 0, g: 'v' })),
+    { t: 5.8, kind: 'kami', x: -0.6, path: 'dive' }, { t: 6.2, kind: 'kami', x: 0.6, path: 'dive' },
   ] },
   { name: 'WAVE 3', sub: 'drone swarm', ev: [
-    { t: 0, kind: 'drone', x: -0.4, path: 'orbit', n: 6, speed: 6.5, g: 'a' },
-    { t: 3.2, kind: 'drone', x: 0.4, path: 'orbit', n: 6, speed: 6.5, dir: -1, g: 'b' },
-    { t: 6.2, kind: 'kami', x: -0.6, path: 'dive' }, { t: 6.7, kind: 'kami', x: 0.6, path: 'dive' },
+    { t: 0, kind: 'drone', x: -0.45, path: 'orbit', n: 6, speed: 6.5, g: 'a' },
+    { t: 2.4, kind: 'drone', x: 0.45, path: 'orbit', n: 6, speed: 6.5, dir: -1, g: 'b' },
+    ...[0, 1, 2, 3].map(k => ({ t: 3.4 + k * 0.35, kind: 'fighter', x: 0, path: 'line', speed: 17, amp: 4, freq: 1.2, g: 'c' })),
+    { t: 5.4, kind: 'drone', x: 0, path: 'orbit', n: 6, speed: 7.5, g: 'd' },
+    { t: 6.8, kind: 'kami', x: -0.6, path: 'dive' }, { t: 7.2, kind: 'kami', x: 0.6, path: 'dive' }, { t: 7.6, kind: 'kami', x: 0, path: 'dive' },
   ] },
   { name: 'WAVE 4', sub: 'strafing run', ev: [
-    ...[0, 1, 2, 3, 4, 5].map(k => ({ t: k * 0.28, kind: 'fighter', x: -1.05, path: 'arc', dir: 1, speed: 22, g: 'l' })),
-    { t: 2.4, kind: 'strafer', path: 'cross', dir: 1, speed: 15, stopK: 0.13 },
-    ...[0, 1, 2, 3, 4, 5].map(k => ({ t: 5.4 + k * 0.28, kind: 'fighter', x: 1.05, path: 'arc', dir: -1, speed: 22, g: 'r' })),
+    ...[0, 1, 2, 3, 4, 5].map(k => ({ t: 0 + k * 0.28, kind: 'fighter', x: -1.05, path: 'arc', dir: 1, speed: 22, g: 'l' })),
+    { t: 1.8, kind: 'strafer', path: 'cross', dir: 1, speed: 15, stopK: 0.13 },
+    ...[0, 1, 2, 3, 4, 5].map(k => ({ t: 3.6 + k * 0.28, kind: 'fighter', x: 1.05, path: 'arc', dir: -1, speed: 22, g: 'r' })),
+    { t: 5.4, kind: 'strafer', path: 'cross', dir: -1, speed: 15, stopK: 0.3 },
+    ...[0, 1, 2, 3].map(k => ({ t: 7 + k * 0.3, kind: 'dart', x: 0, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, g: 'd' })),
   ] },
   { name: 'WAVE 5', sub: 'bombers', ev: [
-    { t: 0, kind: 'bomber', x: -0.42, path: 'line', speed: 6.5, amp: 1.5, freq: 0.5 },
-    { t: 2.6, kind: 'bomber', x: 0.42, path: 'line', speed: 6.5, amp: 1.5, freq: 0.5 },
-    ...[0, 1, 2].map(k => ({ t: 4.6 + k * 0.3, kind: 'dart', x: 0, path: 'line', speed: 25, ampK: 0.3, freq: 2.5, g: 'e' })),
+    { t: 0, kind: 'bomber', x: -0.45, path: 'line', speed: 6.5, amp: 1.5, freq: 0.5 },
+    { t: 1.8, kind: 'bomber', x: 0.45, path: 'line', speed: 6.5, amp: 1.5, freq: 0.5 },
+    ...[0, 1, 2, 3].map(k => ({ t: 3.2 + k * 0.3, kind: 'dart', x: -0.3, path: 'line', speed: 25, ampK: 0.32, freq: 2.5, g: 'e' })),
+    { t: 4.8, kind: 'bomber', x: 0, path: 'line', speed: 6.5, amp: 1.5, freq: 0.5 },
+    { t: 7.6, kind: 'kami', x: -0.5, path: 'dive' }, { t: 8, kind: 'kami', x: 0.5, path: 'dive' },
   ] },
   { name: 'WAVE 6', sub: 'marksmen', ev: [
-    { t: 0, kind: 'sniper', x: -0.62, path: 'stop', stay: 9, stopK: 0.1 },
-    { t: 1.6, kind: 'sniper', x: 0.62, path: 'stop', stay: 9, stopK: 0.14 },
-    ...[0, 1, 2, 3].map(k => ({ t: 3 + k * 0.4, kind: 'fighter', x: 0, path: 'line', speed: 17, amp: 5, freq: 1.1, g: 'c' })),
-    { t: 6, kind: 'kami', x: 0, path: 'dive' },
+    { t: 0, kind: 'sniper', x: -0.65, path: 'stop', stay: 10, stopK: 0.1 },
+    { t: 1, kind: 'sniper', x: 0.65, path: 'stop', stay: 10, stopK: 0.14 },
+    ...[0, 1, 2, 3].map(k => ({ t: 2.2 + k * 0.4, kind: 'fighter', x: 0, path: 'line', speed: 17, amp: 5, freq: 1.1, g: 'c' })),
+    { t: 3.6, kind: 'sniper', x: 0, path: 'stop', stay: 9, stopK: 0.07 },
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 4.6 + k * 0.28, kind: 'fighter', x: -1.05, path: 'arc', dir: 1, speed: 23, g: 'l' })),
+    { t: 6.4, kind: 'kami', x: -0.4, path: 'dive' }, { t: 6.8, kind: 'kami', x: 0.4, path: 'dive' },
   ] },
   { name: 'WAVE 7', sub: 'heavy gunship', ev: [
-    { t: 0, kind: 'gun', x: 0, path: 'stop', stay: 9 },
-    { t: 2.2, kind: 'drone', x: -0.55, path: 'orbit', n: 5, speed: 6.5, g: 'a' },
-    { t: 4.6, kind: 'drone', x: 0.55, path: 'orbit', n: 5, speed: 6.5, dir: -1, g: 'b' },
-    { t: 7.4, kind: 'strafer', path: 'cross', dir: -1, speed: 15, stopK: 0.36 },
+    { t: 0, kind: 'gun', x: 0, path: 'stop', stay: 12 },
+    { t: 1.8, kind: 'drone', x: -0.55, path: 'orbit', n: 6, speed: 6.5, g: 'a' },
+    { t: 3.6, kind: 'drone', x: 0.55, path: 'orbit', n: 6, speed: 6.5, dir: -1, g: 'b' },
+    { t: 5.6, kind: 'strafer', path: 'cross', dir: -1, speed: 15, stopK: 0.36 },
+    ...[-2, -1, 0, 1, 2].map(k => ({ t: 7.6 + Math.abs(k) * 0.2, kind: 'fighter', x: k * 0.14, path: 'line', speed: 16, amp: 0, g: 'v' })),
   ] },
   { name: 'FINAL WAVE', sub: 'hold the line', ev: [
-    { t: 0, kind: 'bomber', x: 0, path: 'line', speed: 6, amp: 1.5, freq: 0.5 },
-    ...[0, 1, 2, 3].map(k => ({ t: 1.6 + k * 0.28, kind: 'fighter', x: -1.05, path: 'arc', dir: 1, speed: 24, g: 'l2' })),
-    ...[0, 1, 2, 3].map(k => ({ t: 1.6 + k * 0.28, kind: 'fighter', x: 1.05, path: 'arc', dir: -1, speed: 24, g: 'r2' })),
-    { t: 3.6, kind: 'sniper', x: -0.7, path: 'stop', stay: 8, stopK: 0.1 },
-    { t: 4.2, kind: 'sniper', x: 0.7, path: 'stop', stay: 8, stopK: 0.1 },
-    ...[0, 1, 2, 3].map(k => ({ t: 6 + k * 0.3, kind: 'dart', x: 0, path: 'line', speed: 25, ampK: 0.34, freq: 2.5, g: 'd2' })),
-    { t: 8, kind: 'kami', x: -0.3, path: 'dive' }, { t: 8.4, kind: 'kami', x: 0.3, path: 'dive' },
+    { t: 0, kind: 'bomber', x: -0.42, path: 'line', speed: 6, amp: 1.5, freq: 0.5 },
+    { t: 0.8, kind: 'bomber', x: 0.42, path: 'line', speed: 6, amp: 1.5, freq: 0.5 },
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 1.6 + k * 0.28, kind: 'fighter', x: -1.05, path: 'arc', dir: 1, speed: 24, g: 'l2' })),
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 1.6 + k * 0.28, kind: 'fighter', x: 1.05, path: 'arc', dir: -1, speed: 24, g: 'r2' })),
+    { t: 3.6, kind: 'sniper', x: -0.7, path: 'stop', stay: 9, stopK: 0.1 },
+    { t: 4.2, kind: 'sniper', x: 0.7, path: 'stop', stay: 9, stopK: 0.1 },
+    ...[0, 1, 2, 3, 4].map(k => ({ t: 5.6 + k * 0.3, kind: 'dart', x: 0, path: 'line', speed: 25, ampK: 0.34, freq: 2.5, g: 'd2' })),
+    { t: 6.8, kind: 'strafer', path: 'cross', dir: 1, speed: 15, stopK: 0.3 },
+    { t: 8.6, kind: 'kami', x: -0.4, path: 'dive' }, { t: 9, kind: 'kami', x: 0.4, path: 'dive' },
   ] },
 ];
+AIR_WAVES.forEach(w => w.ev.sort((a, b) => a.t - b.t));   // los eventos se lanzan en orden de tiempo
 function airWavesTick(dt) {
   if (spy.phase !== 'air') return;
   const fb = A.fb;
@@ -15416,6 +15438,7 @@ function airStartBoss() {
   if (_glbBoss && spy.boss && !spy.boss.glb) { scene.remove(spy.boss.root); spy.boss = buildBossV3(); }
   const fb = A.fb, sb = spy.boss;
   spy.phase = 'boss';
+  if (spy.hp < SPY.HP_MAX) { spy.hp = Math.min(SPY.HP_MAX, spy.hp + 40); airPop(spy.planeX, spy.planeZ - 4, 'SHIELD REPAIRED', 'pow'); }
   const s = clamp(fb.hw * 2 / 36, 0.55, 1);
   A.boss = {
     s, x: 0, z: fb.zT - 26 * s, z0: fb.zT + 17 * s, t: 0, intro: 3.2, phase: 1,
