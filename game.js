@@ -11991,7 +11991,7 @@ const GS = {
 const G_SECTIONS = [
   { id: 'highway', name: 'HIGHWAY',        sub: 'shake off the first hunters',   from: 0,    to: 1500, par: 30 },
   { id: 'city',    name: 'DOWNTOWN',       sub: 'gunmen ahead · mind the civilians',      from: 1500, to: 3100, par: 32 },
-  { id: 'bridge',  name: 'BAY BRIDGE',     sub: 'crosswind · mines on the road', from: 3100, to: 4500, par: 28 },
+  { id: 'bridge',  name: 'BAY BRIDGE',     sub: 'mine layers · switchblades', from: 3100, to: 4500, par: 28 },
   { id: 'river',   name: 'RIVER DETOUR',   sub: 'speedboats · floating mines',   from: 4500, to: 5700, par: 24 },
   { id: 'tunnel',  name: 'BLACK TUNNEL',   sub: 'headlights only · armored',     from: 5700, to: 6900, par: 24 },
   { id: 'final',   name: 'FINAL STRAIGHT', sub: 'helicopter · the big rig',      from: 6900, to: 1e9,  par: 60 },
@@ -12915,8 +12915,13 @@ function gBuildTruck() {
 }
 function gBossStart() {
   const m = gBuildTruck();
-  G.boss = { m, x: 0, z: -140, hp: 90, max: 90, t: 0, state: 'enter', st: 0, doors: 0, dead: false, flash: 0, lane: 1.5 };
-  gBanner('⚠ THE BIG RIG', 'it carries the WINGS · hit the open doors, the fuel tanks, or use missiles', '#ff3b5c', 3.5);
+  G.boss = { m, x: 0, z: -140, hp: 45, max: 45, t: 0, state: 'enter', st: 0, doors: 0, dead: false, flash: 0, lane: 1.5 };
+  // duelo limpio: el resto de perseguidores se retira
+  spy.enemies.forEach(e => scene.remove(e.model.root)); spy.enemies = [];
+  G.foes.forEach(f => gFoeRemove(f)); G.foes = [];
+  G.haz.forEach(h => { if (h.type === 'mine' || h.type === 'hbomb') { h.dead = true; if (h.mesh && h.mesh.parent) h.mesh.parent.remove(h.mesh); } });
+  G.shots.forEach(sh => scene.remove(sh.mesh)); G.shots = [];
+  gBanner('⚠ THE BIG RIG', 'it carries the WINGS · get behind it and shoot · missiles hit harder', '#ff3b5c', 3.5);
   gHudBoss(true);
   if (AudioSys.ready) { AudioSys.sfx('beep'); setTimeout(() => AudioSys.sfx('beep'), 400); }
 }
@@ -12928,20 +12933,14 @@ function gBossTick(dt) {
   m.steel.emissiveIntensity = B.flash * 0.4;
   let zr = -9;                     // z de la trasera del remolque
   if (B.state === 'enter') { if (B.z > -24) { B.state = 'cruise'; B.st = 0; } }
-  else if (B.state === 'cruise') { if (B.st > 2.4) { B.state = gr() < 0.68 ? 'doors' : 'block'; B.st = 0; } }
+  else if (B.state === 'cruise') { if (B.st > 2.2) { B.state = 'doors'; B.st = 0; } }
   else if (B.state === 'doors') {
     zr = -8;
-    if (B.st > 0.6 && !B.released) {
+    if (B.st > 0.8 && !B.released) {
       B.released = true;
-      // suelta un embestidor y dos barriles por la puerta
-      gSpawnRammer(false, B.x, B.z + 13);
-      for (let k = 0; k < 2; k++) setTimeout(() => { if (G.boss === B && !B.dead) gBarrel(B.x + rand(-1, 1), B.z + 13); }, 300 + k * 450);
+      gBarrel(B.x + rand(-0.8, 0.8), B.z + 13);     // un barril por la puerta: se esquiva o se revienta a tiros
     }
-    if (B.st > 3.2) { B.state = 'cruise'; B.st = 0; B.released = false; }
-  } else if (B.state === 'block') {
-    // se cruza en tu carril y frena en seco
-    zr = B.st < 1.2 ? -9 : -3.5;
-    if (B.st > 3) { B.state = 'cruise'; B.st = 0; }
+    if (B.st > 3.6) { B.state = 'cruise'; B.st = 0; B.released = false; }
   }
   const open = B.state === 'doors' && B.st > 0.3 && B.st < 3;
   B.doors += ((open ? 1 : 0) - B.doors) * (1 - Math.exp(-dt * 6));
@@ -12950,16 +12949,16 @@ function gBossTick(dt) {
   const zT = zr - 12.6;
   B.zv = clamp((B.z - zT) * 1.1, -12, 12);
   B.z -= B.zv * dt;
-  const tx = B.state === 'block' ? player.x : clamp(Math.sin(B.t * 0.4) * 3.5, -4.5, 4.5);
-  B.x += clamp((tx - B.x) * 1.5, -5, 5) * dt;
+  const tx = clamp(Math.sin(B.t * 0.3) * 2.5, -3, 3);     // se mueve despacio: es fácil ponerse detrás
+  B.x += clamp((tx - B.x) * 1.2, -2.5, 2.5) * dt;
   B.x = clamp(B.x, -5.6, 5.6);
   m.root.position.set(B.x, 0, B.z);
-  m.brakeM.color.setHex(B.state === 'block' && B.st > 1.2 ? 0xff2020 : 0x400000);
+  m.brakeM.color.setHex(0x400000);
   m.beacon.material.color.setHex(Math.floor(B.t * 4) % 2 ? 0xff2a2a : 0x300000);
   m.tanks.forEach(t => { if (t.alive) t.ring.rotation.x += dt * 3; });
   // colisión: el remolque ocupa x±1.8, z de B.z-6.5 a B.z+12.6
   if (!G.dock && spy.iframes <= 0 && Math.abs(B.x - player.x) < 2.8 && B.z > -14.8 && B.z < 8.7) {
-    spyDamage(25, B.x, B.z + 12); player.speed *= 0.65;
+    spyDamage(10, B.x, B.z + 12); player.speed *= 0.8;
     player.x = clamp(player.x + (player.x > B.x ? 2 : -2), -X_LIMIT, X_LIMIT);
   }
   gHudBossTick();
@@ -12976,8 +12975,8 @@ function gBossBullet(b) {
     return true;
   }
   const doorsOpen = B.doors > 0.6 && dz > 9;
-  if (missile || doorsOpen) { gBossHit(missile ? 6 : 1, missile ? 'missile' : 'gun', b.x, b.z); if (missile) gfxBoom(b.x, b.z, 1); return true; }
-  burst(b.x, 2, b.z, 3, { colors: [[1, 1, 0.8], [0.8, 0.85, 1]], speed: 8, up: 4, life: 0.25, size: 0.3, spread: 0.2, grav: 10 });
+  gBossHit(missile ? 8 : doorsOpen ? 2 : 1, missile ? 'missile' : 'gun', b.x, b.z);
+  if (missile) gfxBoom(b.x, b.z, 1);
   return true;
 }
 function gBossHit(dmg, kind, x, z) {
@@ -13300,7 +13299,7 @@ const G_TABLE = {
   bridge:  [['miner', 1.2], ['blade', 0.8], ['rammer', 0.6], ['gunner', 0.5]],
   river:   [],
   tunnel:  [['armor', 1.3], ['blade', 0.8], ['rammer', 0.6]],
-  final:   [['heli', 1], ['armor', 0.7], ['gunner', 0.7], ['miner', 0.6], ['rammer', 0.5]],
+  final:   [['heli', 1], ['gunner', 0.7], ['rammer', 0.7]],
 };
 function gAlive() { return spy.enemies.length + G.foes.filter(f => !f.dead && f.type !== 'agency').length; }
 function gDirector(dt) {
@@ -13333,7 +13332,6 @@ function gSectionStart(i) {
   if (S.id === 'tunnel') { if (G.savedCycle == null) G.savedCycle = cycle; G.cycleT = 0.8; G.dark = 1; }
   else if (S.id === 'final') { G.cycleT = 0.56; G.dark = 0; }
   else { G.dark = 0; if (G.savedCycle != null && S.id !== 'final') G.cycleT = G.savedCycle; }
-  if (S.id === 'bridge') G.windT = 3;
   if (S.id === 'city') G.crossT = 3;
 }
 /* medallas: daño, civiles y tiempo frente al par */
@@ -13351,19 +13349,6 @@ function gSectionEnd(i, final) {
   spy.score += bonus;
   const label = ['', 'BRONZE', 'SILVER', 'GOLD'][stars];
   gMedal(S.name, stars, label, bonus);
-}
-function gWindTick(dt) {
-  if (gSec().id !== 'bridge' || G.boat) { G.wind += (0 - G.wind) * (1 - Math.exp(-dt * 3)); gHudWind(0); return; }
-  G.windT -= dt;
-  if (G.windT <= 0 && !G.gust) { G.gust = { dir: gr() < 0.5 ? -1 : 1, t: 0 }; G.windT = grand(6, 9); }
-  if (G.gust) {
-    const g = G.gust; g.t += dt;
-    const on = g.t > 0.9 && g.t < 3.1;
-    G.wind += ((on ? g.dir * 9 : 0) - G.wind) * (1 - Math.exp(-dt * 4));
-    gHudWind(g.t < 3.1 ? g.dir : 0, g.t < 0.9);
-    if (on && Math.random() < 0.8) burst(player.x - g.dir * 12, rand(0.5, 3), rand(-30, 10), 1, { colors: [[0.9, 0.95, 1]], speed: 1, up: 0, life: 0.6, size: 0.3, spread: 0.2, grav: 0, vz: 0 });
-    if (g.t > 3.4) G.gust = null;
-  }
 }
 function gDarkTick(dt) {
   if (G.cycleT != null) {
@@ -13464,7 +13449,7 @@ function gHudBuild() {
     <div class="g-ban" id="g-ban"><b></b><small></small></div>
     <div class="g-medal" id="g-medal"></div>
     <div class="g-coach" id="g-coach"></div>
-    <div class="g-boss" id="g-boss"><div class="g-bn"><span>THE BIG RIG</span><em>CARRIES THE WINGS</em></div><div class="g-bb"><i id="g-bfill"></i></div></div>
+    <div class="g-boss" id="g-boss"><div class="g-bn"><span>THE BIG RIG</span><em>SHOOT IT FROM BEHIND</em></div><div class="g-bb"><i id="g-bfill"></i></div></div>
     <div class="g-chase" id="g-chase"><small>CATCH IT</small><b id="g-chase-t">15</b></div>
     <div class="g-wind" id="g-wind"></div>
     <div class="g-route" id="g-route"></div>
@@ -13628,7 +13613,6 @@ function gTick(dt) {
   gDockTick(dt);
   gBoatTick(dt);
   gJumpTick(dt);
-  gWindTick(dt);
   gDarkTick(dt);
   gDamageFx(dt);
   gDebrisTick(dt);
@@ -13639,7 +13623,6 @@ function gTick(dt) {
 function gPlayerAfter(dt) {
   if (!G.root || spy.phase !== 'ground') return;
   if (G.shuntV) { player.x += G.shuntV * dt; G.shuntV *= Math.exp(-dt * 9); if (Math.abs(G.shuntV) < 0.5) G.shuntV = 0; }
-  if (G.wind) player.x += G.wind * dt;
   player.x = clamp(player.x, -X_LIMIT, X_LIMIT);
   // golpe lateral contra embestidores (los del código original)
   if (G.shuntT > 0) spy.enemies.forEach(e => {
