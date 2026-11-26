@@ -12065,11 +12065,13 @@ function spyUpdateTransform(dt) {
    - El núcleo de colisión es pequeño (0,75) frente al dibujo del avión; rozar balas puntúa.
    ===================================================================== */
 const AIR = {
-  CAM_TILT: 0.125, CAM_Z0: -12, FOV: 50,
-  // campo de juego fijo en metros: la cámara se aleja o se acerca para que quepa en cualquier
-  // pantalla, así la dificultad es la misma en móvil vertical y en escritorio (en pantallas anchas
-  // sobra espacio a los lados y se oscurece, como un arcade vertical)
+  // cámara inclinada ~20° (se ve el volumen de las naves); sigue al avión en horizontal y se
+  // inclina al girar. La cámara se aleja o se acerca para que quepan al menos ARENA_W × ARENA_H
+  // metros en cualquier pantalla; el campo es algo más ancho que la vista (PAN) y la cámara lo
+  // recorre siguiendo al avión, hasta un máximo de MAX_HW de semiancho en pantallas anchas.
+  CAM_TILT: 0.36, CAM_Z0: -12, FOV: 50, PAN: 6, MAX_HW: 36,
   ARENA_W: 44, ARENA_H: 58,
+  SCROLL: 20, SCROLL_BOOST: 58, SCROLL_BOSS: 8,
   SPEED: 36, FOCUS_SPEED: 15, RESP: 32, TOUCH_GAIN: 1.25, TOUCH_MAX: 140,
   HIT_R: 0.75, GRAZE_R: 2.6, PLANE_SCALE: 1.9,
   SHOT_RATE: 0.07, SHOT_SPEED: 150, MIS_RATE: 0.55, MIS_DMG: 3, MIS_SPEED: 62, MIS_TURN: 6,
@@ -12091,16 +12093,18 @@ const A = {
   waveIdx: 0, waveT: 0, waveOn: false, waveGap: 0, groups: {},
   hitstop: 0, hintT: 0, t: 0,
   boss: null,
+  camX: 0, roll: 0, scroll: AIR.SCROLL, fovPunch: 0,
 };
 const _av = new THREE.Vector3(), _av2 = new THREE.Vector3();
 const _airCam = new THREE.PerspectiveCamera(AIR.FOV, 1, 1, 2000);
 
 /* ---------- cámara fija y campo de juego ---------- */
-function airCamPose() {
+function airCamPose(noPan) {
   const asp = Math.max(0.3, innerWidth / Math.max(1, innerHeight));
   const half = Math.max(AIR.ARENA_H / 2, AIR.ARENA_W / 2 / asp * 1.06);
   const h = half / Math.tan(THREE.MathUtils.degToRad(AIR.FOV / 2));
-  return { pos: { x: 0, y: SPY.AIR_Y + h, z: AIR.CAM_Z0 + h * AIR.CAM_TILT }, look: { x: 0, y: SPY.AIR_Y, z: AIR.CAM_Z0 } };
+  const x = noPan ? 0 : A.camX;
+  return { pos: { x, y: SPY.AIR_Y + h, z: AIR.CAM_Z0 + h * AIR.CAM_TILT }, look: { x, y: SPY.AIR_Y, z: AIR.CAM_Z0 } };
 }
 function _airGround(ndcX, ndcY, out) {
   _av.set(ndcX, ndcY, 0.5).unproject(_airCam).sub(_airCam.position).normalize();
@@ -12108,7 +12112,7 @@ function _airGround(ndcX, ndcY, out) {
   return out.copy(_airCam.position).addScaledVector(_av, t);
 }
 function airField() {
-  const p = airCamPose();
+  const p = airCamPose(true);
   _airCam.aspect = Math.max(0.3, innerWidth / Math.max(1, innerHeight));
   _airCam.fov = AIR.FOV;
   _airCam.position.set(p.pos.x, p.pos.y, p.pos.z);
@@ -12120,7 +12124,7 @@ function airField() {
   const H = bot - top;
   const fb = A.fb;
   fb.zT = top; fb.zB = bot; fb.H = H; fb.vis = visHW;
-  fb.hw = Math.min(visHW, AIR.ARENA_W / 2);
+  fb.hw = Math.min(visHW + AIR.PAN, AIR.MAX_HW);
   return fb;
 }
 function airPlace(px) {
@@ -12288,38 +12292,91 @@ function _airShadow(parent, w, l) {
   m.scale.set(w * 1.5, 1, l * 1.5); m.renderOrder = 3; m.material.opacity = 0.55;
   parent.add(m); return m;
 }
+/* geometrías 3D de los enemigos (compartidas). Morro hacia +z (hacia el jugador). */
+const _air3 = {};
+function _airCyl(rFront, rRear, len, seg) { const g = new THREE.CylinderGeometry(rFront, rRear, len, seg || 10); g.rotateX(Math.PI / 2); return g; }
+function _airCone(r, len, seg) { const g = new THREE.ConeGeometry(r, len, seg || 10); g.rotateX(Math.PI / 2); return g; }
+function air3() {
+  if (_air3.fuse) return _air3;
+  // caza
+  _air3.fuse = _airCyl(0.46, 0.34, 2.6, 10);
+  _air3.nose = _airCone(0.46, 1.4, 10);
+  _air3.wing = _airShapeGeo([[0.25, 0.75], [2.35, -0.45], [2.35, -0.95], [0.25, -1.0]], 0.16, 0.05);
+  _air3.tip = new THREE.BoxGeometry(0.16, 0.22, 0.62);
+  _air3.fin = _airShapeGeo([[0, 0], [0.15, 0.9], [0.75, 0.05]], 0.07, 0.02); _air3.fin.rotateZ(Math.PI / 2); // aleta vertical
+  _air3.nacelle = _airCyl(0.24, 0.27, 1.3, 10);
+  _air3.nozzle = _airCyl(0.2, 0.2, 0.1, 10);
+  _air3.canopy = new THREE.SphereGeometry(0.34, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2); _air3.canopy.scale(0.9, 0.85, 2.1);
+  _air3.pod = _airCyl(0.09, 0.09, 1.1, 6);
+  // kamikaze
+  _air3.dart = _airCone(0.52, 3.8, 9);
+  _air3.dartRear = _airCyl(0.52, 0.46, 0.8, 9);
+  _air3.xfin = new THREE.BoxGeometry(0.07, 1.05, 0.95);
+  _air3.band = new THREE.TorusGeometry(0.47, 0.07, 6, 18);
+  // cañonera
+  _air3.gunHull = _airShapeGeo([[0, 3.0], [1.4, 2.3], [1.9, 0.4], [1.9, -2.4], [1.2, -3.1], [-1.2, -3.1], [-1.9, -2.4], [-1.9, 0.4], [-1.4, 2.3]], 0.9, 0.22);
+  _air3.gunTop = new THREE.BoxGeometry(2.0, 0.7, 3.2);
+  _air3.gunWing = _airShapeGeo([[1.6, 0.6], [3.9, -0.6], [3.9, -1.7], [1.6, -1.9]], 0.3, 0.08);
+  _air3.gunPod = _airCyl(0.62, 0.7, 3.4, 12);
+  _air3.gunNoz = _airCyl(0.5, 0.5, 0.12, 12);
+  _air3.turBase = new THREE.CylinderGeometry(0.9, 1.05, 0.5, 14);
+  _air3.turHead = new THREE.BoxGeometry(1.3, 0.55, 1.2);
+  return _air3;
+}
 function buildAirEnemy(kind) {
-  const G = airGeo();
+  const G = airGeo(), M = air3();
   const root = new THREE.Group(), body = new THREE.Group(); root.add(body);
-  const hull = std({ color: kind === 'kami' ? 0x2a070c : 0x0b0d11, metalness: 0.15, roughness: 0.55, emissive: 0xffffff, emissiveIntensity: 0, envMapIntensity: 0.35 });
-  const accent = std({ color: 0x2a2f37, metalness: 0.2, roughness: 0.5, emissive: 0xffffff, emissiveIntensity: 0, envMapIntensity: 0.4 });
+  const hull = std({ color: kind === 'kami' ? 0x3a0a10 : 0x15181e, metalness: 0.3, roughness: 0.45, emissive: 0xffffff, emissiveIntensity: 0, envMapIntensity: 0.45 });
+  const accent = std({ color: 0x3a404b, metalness: 0.35, roughness: 0.4, emissive: 0xffffff, emissiveIntensity: 0, envMapIntensity: 0.5 });
   const mats = [hull, accent];
+  const add = (geo, mat, x, y, z, parent) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); (parent || body).add(m); return m; };
   let r = 1.8, size = 4;
   if (kind === 'fighter') {
-    body.add(new THREE.Mesh(G.fighter, hull));
-    for (const s of [-1, 1]) { const st = new THREE.Mesh(G.fighterStripe, _airRed); st.scale.x = s; body.add(st); }
-    const cp = new THREE.Mesh(G.canopy, _airRed); cp.position.set(0, 0.36, 0.55); body.add(cp);
-    for (const s of [-0.28, 0.28]) { const e = new THREE.Mesh(G.glow, _airEngine); e.scale.set(0.34, 1, 0.7); e.position.set(s, 0.1, -1.95); body.add(e); }
-    r = 1.7; size = 4.2;
-  } else if (kind === 'kami') {
-    body.add(new THREE.Mesh(G.kami, hull));
-    const cp = new THREE.Mesh(G.canopy, _airOrange); cp.position.set(0, 0.36, 0.3); body.add(cp);
-    const e = new THREE.Mesh(G.glow, _airEngine); e.scale.set(0.55, 1, 1.1); e.position.set(0, 0.1, -1.9); body.add(e);
-    r = 1.4; size = 3.4;
-  } else {
-    body.add(new THREE.Mesh(G.gun, hull));
-    const deck = new THREE.Mesh(G.gunDeck, accent); deck.position.y = 0.55; body.add(deck);
-    for (const s of [-1, 1]) {
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 2.2), _airRed); strip.position.set(s * 2.9, 0.5, -1.1); body.add(strip);
-      const e = new THREE.Mesh(G.glow, _airEngine); e.scale.set(0.8, 1, 1.2); e.position.set(s * 0.65, 0.2, -3.3); body.add(e);
+    add(M.fuse, hull, 0, 0, -0.3);
+    add(M.nose, accent, 0, 0, 1.7);
+    add(M.canopy, _airRed, 0, 0.3, 0.55);
+    for (const sd of [-1, 1]) {
+      const w = add(M.wing, hull, 0, -0.05, -0.25); w.scale.x = sd; w.rotation.z = sd * 0.12;   // diedro
+      add(M.tip, _airRed, sd * 2.25, 0.2, -0.72);
+      const f = add(M.fin, accent, sd * 0.32, 0.25, -1.75); f.rotation.z = sd * 0.3; f.scale.x = sd;
+      add(M.nacelle, accent, sd * 0.5, -0.12, -1.35);
+      add(M.nozzle, _airEngine, sd * 0.5, -0.12, -2.02);
+      const e = add(G.glow, _airEngine, sd * 0.5, -0.1, -2.5); e.scale.set(0.38, 1, 0.9);
+      add(M.pod, accent, sd * 1.35, -0.22, -0.3);
     }
-    const tur = new THREE.Group(); tur.position.set(0, 1.25, 0.2); body.add(tur);
-    tur.add(new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.55, 12), accent));
-    for (const s of [-0.32, 0.32]) { const b = new THREE.Mesh(G.barrel, hull); b.position.set(s, 0.05, 1.2); tur.add(b); }
-    const eye = new THREE.Mesh(G.canopy, _airRed); eye.position.set(0, 0.25, 0.4); tur.add(eye);
+    r = 1.8; size = 4.7;
+  } else if (kind === 'kami') {
+    add(M.dart, hull, 0, 0, 0.5);
+    add(M.dartRear, accent, 0, 0, -1.75);
+    const band = add(M.band, _airOrange, 0, 0, 0.6); band.rotation.x = 0;   // anillo de aviso
+    for (let k = 0; k < 4; k++) {
+      const a = Math.PI / 4 + k * Math.PI / 2;
+      const f = add(M.xfin, k % 2 ? hull : _airRed, Math.cos(a) * 0.62, Math.sin(a) * 0.62, -1.55);
+      f.rotation.z = a - Math.PI / 2;
+    }
+    add(M.nozzle, _airEngine, 0, 0, -2.2).scale.set(2, 2, 1);
+    const e = add(G.glow, _airEngine, 0, 0, -2.8); e.scale.set(0.75, 1, 1.4);
+    r = 1.4; size = 3.6;
+  } else {
+    add(M.gunHull, hull, 0, -0.2, 0);
+    add(M.gunTop, accent, 0, 0.75, -0.6);
+    for (const sd of [-1, 1]) {
+      const w = add(M.gunWing, hull, 0, -0.05, 0); w.scale.x = sd;
+      add(M.gunPod, accent, sd * 3.0, 0.1, -0.9);
+      add(M.gunNoz, _airEngine, sd * 3.0, 0.1, -2.65);
+      const e = add(G.glow, _airEngine, sd * 3.0, 0.1, -3.4); e.scale.set(0.95, 1, 1.5);
+      add(new THREE.BoxGeometry(0.2, 0.2, 2.4), _airRed, sd * 3.85, 0.15, -1.15);
+      add(new THREE.SphereGeometry(0.2, 8, 6), _airRed, sd * 1.9, 0.5, 0.5);
+    }
+    const tur = new THREE.Group(); tur.position.set(0, 1.35, 0.9); body.add(tur);
+    add(M.turBase, accent, 0, 0, 0, tur);
+    add(M.turHead, hull, 0, 0.45, 0.1, tur);
+    for (const sd of [-0.3, 0.3]) add(G.barrel, accent, sd, 0.45, 1.3, tur);
+    add(G.canopy, _airRed, 0, 0.72, 0.35, tur);
     body.userData.tur = tur;
-    r = 3.2; size = 7.6;
+    r = 3.2; size = 8;
   }
+  body.scale.setScalar(1.2); r *= 1.2; size *= 1.2;
   const shadow = _airShadow(A.root, size * 0.9, size);
   A.root.add(root);
   return { root, body, mats, shadow, r, size };
@@ -12386,7 +12443,6 @@ function airHud() {
     </div>
     <div class="sa-hint" id="sa-hint"></div>
     <div class="sa-warn" id="sa-warn"><i></i><b>WARNING</b><small>MOTHERSHIP APPROACHING</small><i></i></div>
-    <div class="sa-edge l" id="sa-edge-l"></div><div class="sa-edge r" id="sa-edge-r"></div>
     <div class="sa-dmg" id="sa-dmg"></div>
     <div id="sa-pops"></div>`;
   document.getElementById('hud').appendChild(_saEl);
@@ -12444,17 +12500,6 @@ function airHudTick() {
       : '<b>WASD / ARROWS</b> move · <b>SHIFT</b> focus · <b>X</b> bomb · auto-fire · pad supported';
     el.classList.toggle('on', v);
   });
-}
-function airEdges() {
-  if (!_saEl) return;
-  const fb = A.fb, show = fb.hw < fb.vis - 1;
-  const l = document.getElementById('sa-edge-l'), r = document.getElementById('sa-edge-r');
-  if (!show) { l.style.display = r.style.display = 'none'; return; }
-  _av.set(fb.hw + 0.8, SPY.AIR_Y, (fb.zT + fb.zB) / 2).project(camera);
-  const px = (_av.x + 1) / 2 * innerWidth;
-  const w = Math.max(0, innerWidth - px);
-  l.style.display = r.style.display = 'block';
-  l.style.width = r.style.width = w + 'px';
 }
 
 /* ---------- puntuación, cadena y daño ---------- */
@@ -12841,10 +12886,11 @@ function airEnemiesTick(dt) {
         d = Math.atan2(Math.sin(d), Math.cos(d));
         e.root.rotation.y += d * (1 - Math.exp(-dt * 8));
       }
-      e.m.body.rotation.z += (clamp(-vx * 0.03, -0.6, 0.6) - e.m.body.rotation.z) * (1 - Math.exp(-dt * 6));
+      e.m.body.rotation.z += (clamp(-vx * 0.045, -0.85, 0.85) - e.m.body.rotation.z) * (1 - Math.exp(-dt * 6));
+      e.m.body.rotation.x += (clamp(vz * -0.01, -0.25, 0.25) - e.m.body.rotation.x) * (1 - Math.exp(-dt * 4));
     }
     e.px = e.x; e.pz = e.z;
-    e.root.position.set(e.x, SPY.AIR_Y, e.z);
+    e.root.position.set(e.x, SPY.AIR_Y + Math.sin(t * 2.3 + e.x) * 0.25, e.z);
     e.m.shadow.position.set(e.x + 3, AIR_FLOOR + 0.3, e.z + 5);
     // destello de impacto
     if (e.flash > 0) { e.flash = Math.max(0, e.flash - dt * 14); }
@@ -12934,7 +12980,7 @@ function airWavesTick(dt) {
     airSpawn(ev.kind, o);
   }
   const done = A.waveEv >= W.ev.length && (A.enemies.length === 0 || A.waveT > 26);
-  if (done) { A.waveOn = false; A.waveIdx++; A.waveGap = 1.4; }
+  if (done) { A.waveOn = false; A.waveIdx++; A.waveGap = 2.2; }
 }
 
 /* ---------- JEFE ---------- */
@@ -13252,7 +13298,21 @@ function spyAirFrame(dt) {
   ebUpdate(A.ebS, gdt); ebUpdate(A.ebL, gdt);
   _airBoomsTick(dt); _airBombTick(dt);
   airHudTick();
-  airEdges();
+  airScrollTick(dt);
+}
+/* scroll dinámico: velocidad según el momento, cámara que sigue al avión y se inclina al girar */
+function airScrollTick(dt) {
+  let st = AIR.SCROLL;
+  if (spy.phase === 'air' && !A.waveOn && A.waveIdx > 0) st = AIR.SCROLL_BOOST;      // acelerón entre oleadas
+  if (spy.phase === 'boss') st = AIR.SCROLL_BOSS;                                     // frena ante el jefe
+  if (spy.phase === 'win' || (A.boss && A.boss.dying)) st = AIR.SCROLL_BOOST * 1.2;   // sale a toda velocidad
+  if (spy.phase === 'dead') st = AIR.SCROLL * 0.5;
+  A.scroll += (st - A.scroll) * (1 - Math.exp(-dt * 1.4));
+  A.fovPunch = clamp((A.scroll - AIR.SCROLL) / (AIR.SCROLL_BOOST - AIR.SCROLL), 0, 1.2) * 4;
+  const fb = A.fb, room = Math.max(0, fb.hw - fb.vis);
+  A.camX = clamp(spy.planeX / Math.max(1, fb.hw - 1.6), -1, 1) * room;
+  const rollT = clamp(-A.vx / AIR.SPEED, -1, 1) * 0.04;
+  A.roll += (rollT - A.roll) * (1 - Math.exp(-dt * 5));
 }
 
 /* ============================================================
@@ -13478,6 +13538,29 @@ function _spPuffTex(seed) {
   pass(-6, -7, 'rgba(255,255,255,A)', 0.62);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
+/* pico rocoso low-poly con nieve en la cima (colores por vértice, sombreado plano) */
+function _spPeak(seed) {
+  let st = seed * 69621 + 7;
+  const r = (a, b) => { st = (st * 48271) % 2147483647; return a + (b - a) * st / 2147483647; };
+  const H = r(24, 32), R = r(6.5, 10);
+  const g = new THREE.ConeGeometry(R, H, 9, 5);
+  const pos = g.attributes.position, col = [];
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i), k = (y + H / 2) / H;           // 0 base → 1 cima
+    if (k < 0.98) {
+      const a = Math.atan2(pos.getZ(i), pos.getX(i)), j = 1 + 0.22 * Math.sin(a * 3 + seed) + r(-0.12, 0.12);
+      pos.setX(i, pos.getX(i) * j); pos.setZ(i, pos.getZ(i) * j); pos.setY(i, y + r(-0.6, 0.6) * (1 - k));
+    }
+    // roca oscura (valores lineales) y nieve solo en la cima
+    const snow = k > 0.9 ? 1 : k > 0.84 ? 0.55 : 0;
+    const rock = 0.07 + r(-0.015, 0.02);
+    col.push(rock * 1.05 + (0.92 - rock) * snow, rock + (0.94 - rock) * snow, rock * 1.15 + (1 - rock * 1.15) * snow);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.translate(0, H / 2, 0);
+  g.computeVertexNormals();
+  return new THREE.Mesh(g);
+}
 function _spBuildAir() {
   const grp = new THREE.Group();
   grp.userData.spyAir = true;
@@ -13504,14 +13587,30 @@ function _spBuildAir() {
     q.scale.set(sc, sc * rand(0.65, 0.9), 1);
     const y = high ? SPY.AIR_Y + rand(9, 16) : FLOOR_Y + rand(11, 22);
     // más alto = más cerca de la cámara = más rápido
-    q.userData = { v: high ? rand(62, 78) : 18 + (y - FLOOR_Y) * 1.3, zMin: -150, zMax: 60 };
+    // factor sobre la velocidad de scroll: más alto = más cerca de la cámara = más rápido
+    q.userData = { v: high ? rand(3.2, 3.9) : 1 + (y - FLOOR_Y) / 16, zMin: -150, zMax: 60 };
     q.position.set(rand(-85, 85), y, rand(-150, 60));
     q.renderOrder = high ? 10 : 2;
     grp.add(q); puffs.push(q);
   }
+  // picos nevados que asoman entre las nubes: dan profundidad y paralaje al scroll
+  const peaks = [];
+  const peakMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92, metalness: 0 });
+  for (let i = 0; i < 9; i++) {
+    const pk = _spPeak(i);
+    pk.material = peakMat;
+    pk.position.set(rand(-75, 75), FLOOR_Y - 20, -150 + i * 24 + rand(-8, 8));
+    pk.rotation.y = rand(0, Math.PI * 2);
+    pk.renderOrder = 1;
+    // bruma en la base: el pico sale de entre las nubes en vez de cortarse contra el suelo
+    const mist = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: texs[i % 3], transparent: true, opacity: 0.95, depthWrite: false, fog: false, toneMapped: false }));
+    mist.rotation.x = -Math.PI / 2; mist.position.y = 21.5; mist.scale.set(30, 22, 1); mist.renderOrder = 2;
+    pk.add(mist);
+    grp.add(pk); peaks.push(pk);
+  }
   // luz propia para que el avión se vea siempre de día
   grp.add(new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25));
-  return { grp, t1, t2, tile1, tile2, puffs };
+  return { grp, t1, t2, tile1, tile2, puffs, peaks };
 }
 function _spKeep(o) {
   return o === _spAir.grp || o.isLight || o === sky || o.isPoints ||
@@ -13550,13 +13649,17 @@ function spyAirTick(dt) {
   bendUniform.value.set(0, 0);   // la curvatura de la carretera no afecta al cielo
   scene.fog.color.setHex(0xbfdcf5); scene.fog.near = 200; scene.fog.far = 700;
   if (state === 'paused') return;
-  const T = _spAir;
-  T.t1.offset.y += 16 * dt / T.tile1;
-  T.t2.offset.y += 30 * dt / T.tile2;
+  const T = _spAir, sp = A.scroll;
+  T.t1.offset.y += sp * dt / T.tile1;
+  T.t2.offset.y += sp * 1.8 * dt / T.tile2;
   T.t2.offset.x = Math.sin(simTime * 0.07) * 0.03;
   T.puffs.forEach(q => {
-    q.position.z += q.userData.v * dt;
+    q.position.z += q.userData.v * sp * dt;
     if (q.position.z > q.userData.zMax) { q.position.z = q.userData.zMin - rand(0, 40); q.position.x = rand(-85, 85); }
+  });
+  T.peaks.forEach(pk => {
+    pk.position.z += sp * 1.15 * dt;   // la cima está algo por encima del mar de nubes
+    if (pk.position.z > 75) { pk.position.z = -170 - rand(0, 40); pk.position.x = rand(-75, 75); pk.rotation.y = rand(0, Math.PI * 2); }
   });
 }
 
@@ -13569,7 +13672,7 @@ function spyCamera(dt) {
   } else if (spy.inAir) {
     const a = spyAirCamTarget();
     _spCamPos.set(a.pos.x, a.pos.y, a.pos.z); _spCamLook.set(a.look.x, a.look.y, a.look.z);
-    c.fov = AIR.FOV;
+    c.fov = AIR.FOV + (save.settings.reducedMotion ? 0 : A.fovPunch);
   } else {
     const x = player.x * 0.5;
     _spCamPos.set(x, 30, 10); _spCamLook.set(x, 0, -5);
@@ -13586,6 +13689,7 @@ function spyCamera(dt) {
     camera.position.x += rand(-1, 1) * shake * 0.35; camera.position.z += rand(-1, 1) * shake * 0.25;
   }
   camera.lookAt(c.look);
+  if (spy.inAir && spy.phase !== 'transform' && !save.settings.reducedMotion) camera.rotateZ(A.roll);
   camera.fov = c.fov;
   camera.updateProjectionMatrix();
   sky.position.copy(camera.position);
@@ -13834,9 +13938,6 @@ body.spy-air .tbtn.spy-fire.on { background:rgba(125,249,255,.35); box-shadow:0 
 @keyframes saWarn { 0% { opacity:0; } 8% { opacity:1; } 88% { opacity:1; } 100% { opacity:0; } }
 @keyframes saStripe { to { background-position:40px 0; } }
 @keyframes saBlink { 50% { opacity:.35; } }
-.sa-edge { position:absolute; top:0; bottom:0; display:none; }
-.sa-edge.l { left:0; background:linear-gradient(90deg, rgba(5,8,25,.5), rgba(5,8,25,.18)); border-right:2px solid rgba(0,240,255,.4); }
-.sa-edge.r { right:0; background:linear-gradient(270deg, rgba(5,8,25,.5), rgba(5,8,25,.18)); border-left:2px solid rgba(0,240,255,.4); }
 .sa-dmg { position:absolute; inset:0; opacity:0; box-shadow:inset 0 0 16vmin 1vmin rgba(255,30,60,.6); }
 .sa-dmg.go { animation:saDmg .55s ease-out; }
 @keyframes saDmg { from { opacity:1; } to { opacity:0; } }
