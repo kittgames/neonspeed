@@ -4418,12 +4418,19 @@ function loadSave() {
     });
     return d;
   }
-  return Object.assign(d, s, {
+  const out = Object.assign(d, s, {
     upgrades: Object.assign(d.upgrades, s.upgrades || {}),
     settings: Object.assign(d.settings, s.settings || {}),
     stats: Object.assign(d.stats, s.stats || {}),
     badges: Object.assign({}, s.badges || {}),
   });
+  // Defensas ante datos guardados dañados o con tipos incorrectos (p. ej. owned: null)
+  const def = defaultSave();
+  if (!Array.isArray(out.owned) || !out.owned.length) out.owned = def.owned;
+  if (!out.owned.includes(out.selected)) out.selected = out.owned[0];
+  if (typeof out.coins !== 'number' || !isFinite(out.coins) || out.coins < 0) out.coins = 0;
+  if (!out.badges || typeof out.badges !== 'object') out.badges = {};
+  return out;
 }
 let save = loadSave();
 const persist = () => store.set(SAVE_KEY, JSON.stringify(save));
@@ -6169,6 +6176,13 @@ function hitObstacle(o, z) {
     o.mesh.visible = false;
     return;
   }
+  // Spy Hunter mode: obstacles deal energy damage instead of instant crash
+  if (spy.mode && spy.phase === 'ground') {
+    spyDamage(SPY.DMG_TRAFFIC);
+    o.mesh.visible = false;
+    flash('#ffd23f'); shake = 0.3;
+    return;
+  }
   crash({ x: o.x, z, model: null }, dir);
 }
 // Lights for zones (glow points + wet reflections)
@@ -6542,6 +6556,8 @@ function nearMiss(v, gap) {
 }
 function hitVehicle(v) {
   if (player.invuln > 0) return;
+  // Spy Hunter mode: spy.js handles damage via energy bar, skip crash
+  if (spy.mode && spy.phase === 'ground') return;
   const dir = Math.sign(v.x - player.x) || pick([-1, 1]);
   if (player.shield) {
     player.shield = false; player.invuln = 1.2;
@@ -10024,7 +10040,7 @@ Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.
 const SPY = {
   /* energía */
   HP_MAX: 100,
-  DMG_ENEMY:    25,   // embestida de enemigo
+  DMG_ENEMY:    20,   // embestida de enemigo
   DMG_TRAFFIC:  15,   // choque con tráfico inocente
   DMG_KILL:     30,   // eliminar inocente
   HEAL_PIECE:   20,   // recoger pieza
@@ -10032,9 +10048,14 @@ const SPY = {
   REGEN_RATE:   6,    // hp/s
 
   /* enemigos de embestida */
-  ENEMY_INTERVAL: 6,  // s base
-  ENEMY_SPEED_MIN: 38,
-  ENEMY_SPEED_MAX: 52,
+  ENEMY_INTERVAL: 5,  // s base (era 6)
+  ENEMY_SPEED_MIN: 42,
+  ENEMY_SPEED_MAX: 58,
+  ENEMY_STEER: 14,    // velocidad lateral de persecución (era 8 hardcoded)
+  ENEMY_CHARGE_DIST: 25,  // distancia Z para activar carga
+  ENEMY_CHARGE_SPEED: 80, // velocidad durante carga
+  ENEMY_CHARGE_STEER: 22, // steering lateral durante carga
+  ENEMY_WARN_TIME: 0.8,   // s de aviso antes de cargar
   ENEMY_COLOR: 0x1a1a1a,
   ENEMY_ACCENT: 0xff2020,
 
@@ -10064,6 +10085,15 @@ const SPY = {
   MISSILE_SPEED: 60,
   MISSILE_DMG: 10,
 
+  /* enemigos aéreos */
+  AIR_ENEMY_WAVES: 3,       // oleadas antes del boss
+  AIR_ENEMY_PER_WAVE: 3,    // aviones por oleada
+  AIR_ENEMY_SPEED: 35,      // velocidad de avance (Z)
+  AIR_ENEMY_STRAFE: 18,     // velocidad lateral
+  AIR_ENEMY_HP: 2,          // misiles para destruir
+  AIR_ENEMY_DIVE_SPEED: 55, // velocidad de picado
+  AIR_ENEMY_SCORE: 200,     // puntos por derribo
+
   /* jefe 1 */
   BOSS_Y: 42,
   BOSS_Z: -40,
@@ -10079,9 +10109,13 @@ const SPY = {
 /* ---------- estado ---------- */
 const spy = {
   mode: false,          // modo activo
+  gen: 0,               // generación de partida: invalida temporizadores de partidas anteriores
+  ended: false,         // spyEnd ya se ejecutó en esta partida
+  bossDying: false,     // el jefe ya está muriendo (explosión en curso)
   phase: 'off',         // off | ground | transform | air | boss | win | dead
   hp: SPY.HP_MAX,
   lastDmg: 0,          // tiempo desde último daño
+  iframes: 0,          // invulnerabilidad tras golpe (s)
   pieces: 0,           // 0-4 piezas recogidas
   weapon: 0,           // 0=nada, 1=gun, 2=+bombs, 3=+missiles
   score: 0,
@@ -10113,6 +10147,11 @@ const spy = {
   attackCd: 2,
   bossT: 0,            // tiempo total del combate
 
+  /* enemigos aéreos */
+  airEnemies: [],
+  airWave: 0,
+  airWaveDelay: 0,
+
   /* transformación */
   transformT: 0,
 
@@ -10122,36 +10161,412 @@ const spy = {
 };
 
 /* ============================================================
+   CARGA DE MODELOS GLB
+   ============================================================ */
+
+/* Mini GLB parser — extrae meshes de un archivo .glb sin GLTFLoader.
+   Soporta accessor→bufferView→buffer con tipos FLOAT, UNSIGNED_SHORT,
+   UNSIGNED_INT, UNSIGNED_BYTE. Devuelve un THREE.Group con todos los meshes. */
+
+const _GLB_MAGIC = 0x46546C67; // 'glTF'
+const _COMP_TYPE = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+const _COMP_SIZE = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+function parseGLB(buffer) {
+  const dv = new DataView(buffer);
+  if (dv.getUint32(0, true) !== _GLB_MAGIC) throw new Error('Not a GLB');
+  // header: magic(4) version(4) length(4)
+  // chunk0: length(4) type(4) data
+  const jsonLen = dv.getUint32(12, true);
+  const jsonStr = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLen));
+  const gltf = JSON.parse(jsonStr);
+  // chunk1 (BIN)
+  const binOffset = 20 + jsonLen;
+  const binLen = dv.getUint32(binOffset, true);
+  const bin = buffer.slice(binOffset + 8, binOffset + 8 + binLen);
+
+  function getAccessorData(accIdx) {
+    const acc = gltf.accessors[accIdx];
+    const bv = gltf.bufferViews[acc.bufferView];
+    const TypedArr = _COMP_TYPE[acc.componentType];
+    const offset = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const count = acc.count * _COMP_SIZE[acc.type];
+    if (bv.byteStride && bv.byteStride !== TypedArr.BYTES_PER_ELEMENT * _COMP_SIZE[acc.type]) {
+      // interleaved — copy deinterleaved
+      const stride = bv.byteStride;
+      const components = _COMP_SIZE[acc.type];
+      const out = new TypedArr(acc.count * components);
+      const src = new DataView(bin, bv.byteOffset || 0);
+      const accOff = acc.byteOffset || 0;
+      for (let i = 0; i < acc.count; i++) {
+        for (let c = 0; c < components; c++) {
+          out[i * components + c] = new TypedArr(bin, (bv.byteOffset || 0) + accOff + i * stride + c * TypedArr.BYTES_PER_ELEMENT, 1)[0];
+        }
+      }
+      return out;
+    }
+    return new TypedArr(bin, offset, count);
+  }
+
+  const group = new THREE.Group();
+  const defaultMat = std({ color: 0x888888, metalness: 0.5, roughness: 0.5 });
+  // texturas embebidas (glTF: imagen en un bufferView); se cargan en segundo plano
+  const texCache = {};
+  function glbTexture(texIdx, srgb) {
+    if (texCache[texIdx]) return texCache[texIdx];
+    const tdef = gltf.textures && gltf.textures[texIdx];
+    const img = tdef && gltf.images[tdef.source];
+    if (!img || img.bufferView === undefined) return null;
+    const bv = gltf.bufferViews[img.bufferView];
+    const blob = new Blob([new Uint8Array(bin, bv.byteOffset || 0, bv.byteLength)], { type: img.mimeType || 'image/jpeg' });
+    const tex = new THREE.Texture();
+    tex.flipY = false;
+    if (srgb) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const el = new Image();
+    el.onload = () => { tex.image = el; tex.needsUpdate = true; };
+    el.src = URL.createObjectURL(blob);
+    texCache[texIdx] = tex;
+    return tex;
+  }
+
+  (gltf.meshes || []).forEach(mesh => {
+    mesh.primitives.forEach(prim => {
+      const geo = new THREE.BufferGeometry();
+      // Position
+      if (prim.attributes.POSITION !== undefined) {
+        geo.setAttribute('position', new THREE.BufferAttribute(getAccessorData(prim.attributes.POSITION), 3));
+      }
+      // Normal
+      if (prim.attributes.NORMAL !== undefined) {
+        geo.setAttribute('normal', new THREE.BufferAttribute(getAccessorData(prim.attributes.NORMAL), 3));
+      }
+      // UV
+      if (prim.attributes.TEXCOORD_0 !== undefined) {
+        geo.setAttribute('uv', new THREE.BufferAttribute(getAccessorData(prim.attributes.TEXCOORD_0), 2));
+      }
+      // Color
+      if (prim.attributes.COLOR_0 !== undefined) {
+        const colorAcc = gltf.accessors[prim.attributes.COLOR_0];
+        const colorData = getAccessorData(prim.attributes.COLOR_0);
+        const itemSize = _COMP_SIZE[colorAcc.type];
+        // Normalize if uint8/uint16
+        let normalized = false;
+        if (colorAcc.componentType === 5121 || colorAcc.componentType === 5123) normalized = true;
+        geo.setAttribute('color', new THREE.BufferAttribute(colorData, itemSize, normalized));
+      }
+      // Indices
+      if (prim.indices !== undefined) {
+        geo.setIndex(new THREE.BufferAttribute(getAccessorData(prim.indices), 1));
+      }
+      if (!prim.attributes.NORMAL) geo.computeVertexNormals();
+
+      // Material — intenta extraer color base del glTF
+      let mat = defaultMat;
+      if (prim.material !== undefined && gltf.materials) {
+        const gMat = gltf.materials[prim.material];
+        const pbr = gMat && gMat.pbrMetallicRoughness;
+        if (pbr) {
+          const bc = pbr.baseColorFactor || [1, 1, 1, 1];
+          const map = pbr.baseColorTexture ? glbTexture(pbr.baseColorTexture.index, true) : null;
+          mat = std({
+            color: new THREE.Color(bc[0], bc[1], bc[2]),
+            map,
+            metalness: pbr.metallicRoughnessTexture ? 0.45 : (pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.5),
+            roughness: pbr.metallicRoughnessTexture ? 0.45 : (pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.5),
+            transparent: bc[3] < 1,
+            opacity: bc[3],
+          });
+          if (map) { mat.emissive = new THREE.Color(0xffffff); mat.emissiveMap = map; mat.emissiveIntensity = 0.18; }
+          if (gMat.doubleSided) mat.side = THREE.DoubleSide;
+        }
+      }
+
+      const m = new THREE.Mesh(geo, mat);
+      group.add(m);
+    });
+  });
+
+  // Apply node transforms from scene hierarchy
+  if (gltf.nodes && gltf.scenes) {
+    // Simple: just merge all into one group, applying root transforms
+    const scene0 = gltf.scenes[gltf.scene || 0];
+    if (scene0 && scene0.nodes) {
+      // For now we already added all meshes flat — apply scene scale if needed
+    }
+  }
+
+  return group;
+}
+
+/* --- Precarga de modelos GLB --- */
+let _glbPlane = null, _glbBoss = null, _glbEnemy = null, _glbLoading = null;
+
+function preloadSpyModels() {
+  if (_glbLoading) return _glbLoading;
+  _glbLoading = Promise.all([
+    fetch('plane.glb').then(r => r.arrayBuffer()).then(buf => { _glbPlane = parseGLB(buf); }).catch(e => { console.warn('plane.glb load failed, using procedural:', e); }),
+    fetch('boss.glb').then(r => r.arrayBuffer()).then(buf => { _glbBoss = parseGLB(buf); }).catch(e => { console.warn('boss.glb load failed, using procedural:', e); }),
+    fetch('enemy.glb').then(r => r.arrayBuffer()).then(buf => { _glbEnemy = parseGLB(buf); }).catch(e => { console.warn('enemy.glb load failed, using procedural:', e); }),
+  ]);
+  return _glbLoading;
+}
+
+// Iniciar precarga inmediatamente
+preloadSpyModels();
+
+/* ============================================================
    MODELOS 3D PROCEDURALES
    ============================================================ */
 
-/* --- Coche enemigo (negro con tiras rojas, agresivo) --- */
+/* --- Coche enemigo (negro con rojo, amenazante y visible) --- */
 function buildEnemyCar() {
-  const m = buildCar({ color: SPY.ENEMY_COLOR, accent: SPY.ENEMY_ACCENT, style: 'sport' });
-  // Añadir luz roja parpadeante en el techo
-  const warn = new THREE.Mesh(
-    new THREE.SphereGeometry(0.3, 8, 6),
-    basic({ color: 0xff2020, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const matBlack = std({ color: 0x0a0a0a, metalness: 0.95, roughness: 0.15 });
+  const matRed = std({ color: 0xcc0000, metalness: 0.8, roughness: 0.2, emissive: 0xff2020, emissiveIntensity: 0.5 });
+  const matGlow = basic({ color: 0xff2020, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  // Chasis musculoso (más ancho y bajo que un coche normal)
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 5.0), matBlack);
+  chassis.position.y = 0.35;
+  body.add(chassis);
+  // Cabina baja y agresiva
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 2.8), matBlack);
+  cabin.position.set(0, 1.05, 0.2);
+  body.add(cabin);
+  // Capó inclinado (cuña frontal)
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 1.8), matBlack);
+  hood.position.set(0, 0.7, -1.8);
+  hood.rotation.x = 0.15;
+  body.add(hood);
+  // Ruedas (4)
+  const wGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.35, 8);
+  const wMat = std({ color: 0x111111, metalness: 0.3, roughness: 0.8 });
+  for (let sx = -1; sx <= 1; sx += 2) {
+    for (let sz = -1; sz <= 1; sz += 2) {
+      const w = new THREE.Mesh(wGeo, wMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(sx * 1.3, 0.5, sz * 1.5);
+      body.add(w);
+    }
+  }
+
+  // === SEÑALES VISUALES ROJAS ===
+  // Franjas laterales rojas brillantes
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 4.6), matRed);
+    stripe.position.set(sx * 1.31, 0.7, -0.2);
+    body.add(stripe);
+  }
+  // Parachoques frontal rojo (barra de embestida)
+  const ram = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.35, 0.3), matRed);
+  ram.position.set(0, 0.5, -2.65);
+  body.add(ram);
+  // Segundo parachoques (defensa)
+  const ram2 = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.2, 0.2), matRed);
+  ram2.position.set(0, 0.3, -2.75);
+  body.add(ram2);
+
+  // Sirena roja en el techo (más grande)
+  const warn = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), matGlow);
+  warn.position.set(0, 1.7, 0.2);
+  root.add(warn);
+
+  // Resplandor rojo debajo del coche (underglow)
+  const underglow = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.5, 6),
+    basic({ color: 0xff1010, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
   );
-  warn.position.set(0, 1.6, 0);
-  m.root.add(warn);
-  m.warn = warn;
-  return m;
+  underglow.rotation.x = -Math.PI / 2;
+  underglow.position.set(0, 0.05, 0);
+  root.add(underglow);
+
+  // Faros delanteros rojos
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const hl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 4), matGlow);
+    hl.position.set(sx * 0.9, 0.65, -2.6);
+    body.add(hl);
+  }
+
+  return { root, body, warn, underglow };
 }
 
-/* --- Coche de pieza (brillante, color según pieza) --- */
+/* --- Coche de pieza (furgoneta blindada con beacon) --- */
 function buildPieceCar(pieceIndex) {
   const color = SPY.PIECE_COLORS[pieceIndex];
-  const m = buildCar({ color, accent: 0xffffff, style: 'suv' });
-  // Icono flotante sobre el coche
-  const iconGeo = new THREE.OctahedronGeometry(0.6, 0);
-  const iconMat = basic({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-  const icon = new THREE.Mesh(iconGeo, iconMat);
-  icon.position.set(0, 2.8, 0);
-  m.root.add(icon);
-  m.icon = icon;
-  m.pieceIndex = pieceIndex;
-  return m;
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const matBody = std({ color: 0x111111, metalness: 0.9, roughness: 0.2 });
+  const matGlow = basic({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const matStripe = std({ color, metalness: 0.7, roughness: 0.3, emissive: color, emissiveIntensity: 0.6 });
+
+  // --- Furgoneta blindada (más grande y distinta que un coche) ---
+  // Chasis bajo
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 5.2), matBody);
+  chassis.position.y = 0.3;
+  body.add(chassis);
+  // Cabina alta
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.6, 3.8), matBody);
+  cabin.position.set(0, 1.3, -0.3);
+  body.add(cabin);
+  // Techo
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.15, 4.0), matStripe);
+  roof.position.set(0, 2.15, -0.3);
+  body.add(roof);
+  // Ruedas (4)
+  const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.35, 8);
+  const wheelMat = std({ color: 0x222222, metalness: 0.3, roughness: 0.8 });
+  for (let sx = -1; sx <= 1; sx += 2) {
+    for (let sz = -1; sz <= 1; sz += 2) {
+      const w = new THREE.Mesh(wheelGeo, wheelMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(sx * 1.3, 0.5, sz * 1.6);
+      body.add(w);
+    }
+  }
+  // Franjas laterales de color (identifican la pieza)
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 4.0), matStripe);
+    stripe.position.set(sx * 1.21, 1.3, -0.3);
+    body.add(stripe);
+  }
+  // Franja frontal de color
+  const fStripe = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 0.08), matStripe);
+  fStripe.position.set(0, 1.0, -2.3);
+  body.add(fStripe);
+
+  // --- BEACON: columna de luz vertical ---
+  const beaconGeo = new THREE.CylinderGeometry(0.15, 0.4, 8, 6);
+  const beaconMat = basic({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+  const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+  beacon.position.set(0, 6, 0);
+  root.add(beacon);
+
+  // --- ANILLO giratorio horizontal ---
+  const ringGeo = new THREE.TorusGeometry(2.5, 0.08, 4, 24);
+  const ringMat = basic({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.set(0, 2.5, 0);
+  root.add(ring);
+
+  // --- Segundo anillo (más grande, opuesto) ---
+  const ring2 = new THREE.Mesh(
+    new THREE.TorusGeometry(3.2, 0.06, 4, 24),
+    basic({ color, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  ring2.rotation.x = Math.PI / 2;
+  ring2.position.set(0, 1.8, 0);
+  root.add(ring2);
+
+  // --- Icono pieza (diamante rotatorio arriba) ---
+  const iconGeo = new THREE.SphereGeometry(0.5, 4, 2);
+  const icon = new THREE.Mesh(iconGeo, matGlow);
+  icon.position.set(0, 3.5, 0);
+  root.add(icon);
+
+  // --- Pulso de suelo (onda expansiva) ---
+  const pulseGeo = new THREE.TorusGeometry(1.5, 0.12, 4, 20);
+  const pulseMat = basic({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+  const pulse = new THREE.Mesh(pulseGeo, pulseMat);
+  pulse.rotation.x = Math.PI / 2;
+  pulse.position.y = 0.3;
+  root.add(pulse);
+
+  // --- Cartel horizontal (se lee desde la cámara cenital) ---
+  const hex = '#' + color.toString(16).padStart(6, '0');
+  const cv = document.createElement('canvas'); cv.width = 768; cv.height = 180;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgba(8,10,30,0.88)'; g.strokeStyle = hex; g.lineWidth = 10;
+  g.beginPath(); g.roundRect(8, 8, 752, 164, 40); g.fill(); g.stroke();
+  g.fillStyle = hex; g.font = 'bold 70px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(['🔫', '💣', '🚀', '✈️'][pieceIndex] + ' ' + SPY.PIECE_NAMES[pieceIndex], 384, 94);
+  const lt = new THREE.CanvasTexture(cv); lt.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(13, 3.05), basic({ map: lt, transparent: true, depthWrite: false, depthTest: false }));
+  label.rotation.x = -Math.PI / 2; label.position.set(0, 4.2, -5.2); label.renderOrder = 20;
+  root.add(label);
+  // --- Halo grande en la carretera ---
+  const haloMat = basic({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false });
+  const halo = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 0.02, 32), haloMat);
+  halo.position.y = 0.06;
+  root.add(halo);
+
+  return {
+    root, body, icon, beacon, ring, ring2, pulse, label, halo, haloMat,
+    beaconMat, ringMat, pulseMat,
+    pieceIndex
+  };
+}
+
+/* --- Avión enemigo steampunk (biplano con boca de tiburón) --- */
+function buildEnemyPlane() {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  if (_glbEnemy) {
+    const model = _glbEnemy.clone();
+    model.scale.set(2.2, 2.2, 2.2);
+    model.rotation.y = Math.PI;
+    body.add(model);
+  } else {
+    /* Fallback procedural — biplano simple */
+    const matIron = std({ color: 0x2a2a2a, metalness: 0.8, roughness: 0.3 });
+    const matBrass = std({ color: 0xb8860b, metalness: 0.9, roughness: 0.2 });
+    const matRed = std({ color: 0xcc2222, metalness: 0.6, roughness: 0.4 });
+
+    // Fuselaje
+    const fuse = new THREE.Mesh(new THREE.BoxGeometry(1, 0.7, 3.5), matIron);
+    body.add(fuse);
+    // Alas dobles (biplano)
+    for (let wy = -1; wy <= 1; wy += 2) {
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(5, 0.06, 1.2), matIron);
+      wing.position.set(0, wy * 0.5, 0);
+      body.add(wing);
+      // Punteras rojas
+      for (let s = -1; s <= 1; s += 2) {
+        const tip = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.08, 1.2), matRed);
+        tip.position.set(s * 2.5, wy * 0.5, 0);
+        body.add(tip);
+      }
+    }
+    // Hélices (2)
+    for (let s = -1; s <= 1; s += 2) {
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.3, 8), matBrass);
+      hub.rotation.x = Math.PI / 2;
+      hub.position.set(s * 1.3, 0, 1.8);
+      body.add(hub);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.04, 0.15), matBrass);
+      blade.position.set(s * 1.3, 0, 2);
+      body.add(blade);
+    }
+    // Cañón frontal
+    const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.2, 6), matBrass);
+    gun.rotation.x = Math.PI / 2;
+    gun.position.set(0, -0.15, 2.4);
+    body.add(gun);
+  }
+
+  // Exhaust glow (para ambas versiones)
+  const exGlow = basic({ color: 0xff4400, transparent: true, opacity: 0.6,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const exGeo = new THREE.ConeGeometry(0.2, 0.8, 5);
+  exGeo.rotateX(-Math.PI / 2);
+  const exL = new THREE.Mesh(exGeo, exGlow);
+  exL.position.set(-0.5, 0, -2);
+  body.add(exL);
+  const exR = new THREE.Mesh(exGeo.clone(), exGlow);
+  exR.position.set(0.5, 0, -2);
+  body.add(exR);
+
+  root.visible = false;
+  scene.add(root);
+  return { root, body, exL, exR };
 }
 
 /* --- Avión del jugador (transformación del coche) --- */
@@ -10160,146 +10575,556 @@ function buildPlane() {
   const body = new THREE.Group();
   root.add(body);
 
-  const mat = std({ color: 0x1a2a4a, metalness: 0.7, roughness: 0.3 });
-  const glow = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
-  const red = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+  if (_glbPlane) {
+    /* === Usar modelo GLB === */
+    const model = _glbPlane.clone();
+    // Escalar y orientar el modelo para que encaje con el gameplay
+    model.scale.set(3, 3, 3);
+    model.rotation.y = Math.PI / 2; // el morro del modelo está en +X → girarlo hacia -Z (dirección de vuelo)
+    body.add(model);
 
-  // Fuselaje
-  const fuse = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 5), mat);
-  body.add(fuse);
+    // Crear grupos de thruster sintéticos para las llamas
+    const glowMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+    const flameGeo = new THREE.ConeGeometry(0.2, 1.1, 6);
+    flameGeo.rotateX(Math.PI / 2);
 
-  // Cabina
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.8), std({ color: 0x0d1626, metalness: 0.9, roughness: 0.08, transparent: true, opacity: 0.8 }));
-  cab.position.set(0, 0.4, 0.5);
-  body.add(cab);
+    const thrL = new THREE.Group();
+    const flameL = new THREE.Mesh(flameGeo, glowMat);
+    flameL.position.z = 0.6;
+    thrL.add(flameL);
+    thrL.position.set(-0.3, 0, 1.35);
+    body.add(thrL);
 
-  // Alas
-  const wingGeo = new THREE.BoxGeometry(8, 0.12, 2.2);
-  const wingL = new THREE.Mesh(wingGeo, mat);
-  wingL.position.set(0, 0, -0.3);
-  body.add(wingL);
+    const thrR = new THREE.Group();
+    const flameR = new THREE.Mesh(flameGeo.clone(), glowMat);
+    flameR.position.z = 0.6;
+    thrR.add(flameR);
+    thrR.position.set(0.3, 0, 1.35);
+    body.add(thrR);
 
-  // Alerones punta de ala
-  const tipGeo = new THREE.BoxGeometry(0.3, 0.8, 0.8);
-  const tipL = new THREE.Mesh(tipGeo, mat);
-  tipL.position.set(-4, 0.3, -0.3);
-  body.add(tipL);
-  const tipR = new THREE.Mesh(tipGeo, mat);
-  tipR.position.set(4, 0.3, -0.3);
-  body.add(tipR);
+    // Halo sutil debajo
+    const glowH = basic({ color: 0x00f0ff, transparent: true, opacity: 0.15,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), glowH);
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.set(0, -0.5, -0.2);
+    body.add(halo);
 
-  // Estabilizador trasero
-  const tailGeo = new THREE.BoxGeometry(3, 0.1, 1);
-  const tail = new THREE.Mesh(tailGeo, mat);
-  tail.position.set(0, 0, -2.2);
-  body.add(tail);
-  const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 1.2), mat);
-  vTail.position.set(0, 0.5, -2.2);
-  body.add(vTail);
+    root.visible = false;
+    scene.add(root);
+    return { root, body, thrL, thrR, halo };
+  }
 
-  // Propulsores neón
-  const thrustGeo = new THREE.CylinderGeometry(0.25, 0.4, 0.8, 8);
-  thrustGeo.rotateX(Math.PI / 2);
-  const thrL = new THREE.Mesh(thrustGeo, glow);
-  thrL.position.set(-0.5, -0.1, -2.6);
+  /* === Fallback procedural === */
+
+  /* --- Materiales --- */
+  const mat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
+  const matL = std({ color: 0x14243d, metalness: 0.75, roughness: 0.25 });
+  const acc  = std({ color: 0x2a4a6a, metalness: 0.9, roughness: 0.15 });
+  const glow = basic({ color: 0x00f0ff, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const glowH = basic({ color: 0x00f0ff, transparent: true, opacity: 0.35,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const pink = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const cabin = std({ color: 0x061018, metalness: 0.95, roughness: 0.05,
+    transparent: true, opacity: 0.85 });
+
+  /* --- Fuselaje principal (perfil aerodinámico) --- */
+  const fuseGeo = new THREE.BoxGeometry(1.4, 0.55, 5.6, 2, 1, 3);
+  const fp = fuseGeo.attributes.position;
+  for (let i = 0; i < fp.count; i++) {
+    const z = fp.getZ(i);
+    // Estrechamiento hacia nariz y cola
+    const t = (z + 2.8) / 5.6;
+    const taper = 1 - 0.5 * Math.pow(Math.abs(t - 0.55) / 0.55, 2.2);
+    fp.setX(i, fp.getX(i) * Math.max(0.35, taper));
+    fp.setY(i, fp.getY(i) * Math.max(0.5, taper));
+  }
+  fuseGeo.computeVertexNormals();
+  body.add(new THREE.Mesh(fuseGeo, mat));
+
+  // Lomo superior (cresta aerodinámica)
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 3.2), acc);
+  spine.position.set(0, 0.32, -0.2);
+  body.add(spine);
+
+  /* --- Cabina burbuja --- */
+  const cabGeo = new THREE.SphereGeometry(0.6, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+  const cabMesh = new THREE.Mesh(cabGeo, cabin);
+  cabMesh.scale.set(1.1, 0.7, 1.6);
+  cabMesh.position.set(0, 0.28, 0.9);
+  body.add(cabMesh);
+  // Marco de cabina
+  const cabFrame = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.04, 6, 12), acc);
+  cabFrame.scale.set(1.1, 0.7, 1.6);
+  cabFrame.position.set(0, 0.28, 0.9);
+  cabFrame.rotation.x = Math.PI / 2;
+  body.add(cabFrame);
+
+  /* --- Alas delta con sweep --- */
+  for (let side = -1; side <= 1; side += 2) {
+    // Ala principal (angled)
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.08, 2.4), mat);
+    wing.position.set(side * 2.4, -0.02, -0.5);
+    wing.rotation.y = side * -0.08;
+    body.add(wing);
+
+    // Borde de ataque (edge strip glow)
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.03, 0.06), glow);
+    edge.position.set(side * 2.4, 0.02, 0.7);
+    edge.rotation.y = side * -0.08;
+    body.add(edge);
+
+    // Winglet (punta de ala curvada hacia arriba)
+    const wlet = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.7), matL);
+    wlet.position.set(side * 4.2, 0.35, -0.6);
+    wlet.rotation.z = side * -0.25;
+    body.add(wlet);
+
+    // Línea neón en winglet
+    const wGlow = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.7, 0.08), glow);
+    wGlow.position.set(side * 4.35, 0.4, -0.3);
+    body.add(wGlow);
+
+    // Canard (ala frontal pequeña)
+    const canard = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.05, 0.6), matL);
+    canard.position.set(side * 1.0, 0.1, 2.0);
+    canard.rotation.y = side * -0.12;
+    body.add(canard);
+
+    // Pilón bajo ala (soporte de misil)
+    const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.6), acc);
+    pylon.position.set(side * 2.5, -0.18, -0.3);
+    body.add(pylon);
+
+    // Lanzamisiles
+    const misGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.4, 6);
+    misGeo.rotateX(Math.PI / 2);
+    const mis = new THREE.Mesh(misGeo, pink);
+    mis.position.set(side * 2.5, -0.32, -0.3);
+    body.add(mis);
+
+    // Intake de aire (toma lateral)
+    const intake = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.3, 1.0), acc);
+    intake.position.set(side * 0.65, -0.2, -0.5);
+    body.add(intake);
+    const intakeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.1), glow);
+    intakeGlow.position.set(side * 0.65, -0.2, 0.0);
+    body.add(intakeGlow);
+  }
+
+  /* --- Cola doble (twin tail) --- */
+  for (let side = -1; side <= 1; side += 2) {
+    // Plano horizontal
+    const hTail = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.9), mat);
+    hTail.position.set(side * 1.0, 0.05, -2.6);
+    body.add(hTail);
+
+    // Plano vertical (timón)
+    const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.0, 0.9), matL);
+    vTail.position.set(side * 1.0, 0.5, -2.6);
+    vTail.rotation.z = side * 0.12;
+    body.add(vTail);
+
+    // Neon stripe en timón
+    const tStripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.6, 0.06), glow);
+    tStripe.position.set(side * 1.03, 0.55, -2.3);
+    body.add(tStripe);
+  }
+
+  /* --- Propulsores (toberas con afterburner) --- */
+  const thrustHousing = new THREE.CylinderGeometry(0.35, 0.28, 0.5, 8);
+  thrustHousing.rotateX(Math.PI / 2);
+  const flameGeo = new THREE.ConeGeometry(0.28, 1.2, 8);
+  flameGeo.rotateX(-Math.PI / 2);
+
+  const thrL = new THREE.Group();
+  thrL.add(new THREE.Mesh(thrustHousing, acc));
+  const flameL = new THREE.Mesh(flameGeo, glow);
+  flameL.position.z = -0.8;
+  thrL.add(flameL);
+  thrL.position.set(-0.5, -0.08, -2.9);
   body.add(thrL);
-  const thrR = new THREE.Mesh(thrustGeo, glow);
-  thrR.position.set(0.5, -0.1, -2.6);
+
+  const thrR = new THREE.Group();
+  thrR.add(new THREE.Mesh(thrustHousing.clone(), acc));
+  const flameR = new THREE.Mesh(flameGeo.clone(), glow);
+  flameR.position.z = -0.8;
+  thrR.add(flameR);
+  thrR.position.set(0.5, -0.08, -2.9);
   body.add(thrR);
 
-  // Lanzamisiles (bajo alas)
-  const misGeo = new THREE.CylinderGeometry(0.12, 0.12, 1.2, 6);
-  misGeo.rotateX(Math.PI / 2);
-  const misL = new THREE.Mesh(misGeo, red);
-  misL.position.set(-2.5, -0.2, 0);
-  body.add(misL);
-  const misR = new THREE.Mesh(misGeo, red);
-  misR.position.set(2.5, -0.2, 0);
-  body.add(misR);
+  /* --- Líneas neón decorativas --- */
+  // Línea central ventral
+  const vLine = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 4.0), glow);
+  vLine.position.set(0, -0.28, -0.2);
+  body.add(vLine);
+
+  // Halo sutil debajo
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), glowH);
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.set(0, -0.5, -0.2);
+  body.add(halo);
 
   root.visible = false;
   scene.add(root);
   return { root, body, thrL, thrR };
 }
 
-/* --- Nave nodriza steampunk --- */
+/* --- Nave nodriza: fortaleza volante oscura con luces rojas (vista desde arriba) --- */
+function buildBossV2() {
+  const root = new THREE.Group();
+  const hullG = new THREE.Group(); root.add(hullG);
+  const gm = std({ color: 0x0c0e12, metalness: 0.1, roughness: 0.9 });
+  const gm2 = std({ color: 0x0a0c10, metalness: 0.1, roughness: 0.85 });
+  const gm3 = std({ color: 0x0b0c10, metalness: 0.1, roughness: 0.9 });
+  const red = basic({ color: 0xe0140a });
+  const redGlow = basic({ color: 0xff2414 });
+  const engGlow = basic({ color: 0xff7a20, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1, parent = hullG) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.scale.set(sx, sy, sz); parent.add(m); return m;
+  };
+  // casco principal hexagonal alargado
+  const hullMesh = add(new THREE.CylinderGeometry(8, 8.6, 2.2, 6), gm, 0, 0, -1, 0, Math.PI / 6, 0, 1, 1, 1.45);
+  // cubierta superior escalonada
+  add(new THREE.CylinderGeometry(5.6, 6.4, 1.0, 6), gm2, 0, 1.5, -2, 0, Math.PI / 6, 0, 1, 1, 1.4);
+  add(new THREE.CylinderGeometry(3.2, 3.8, 1.2, 6), gm3, 0, 2.4, -6.5, 0, Math.PI / 6, 0, 1, 1, 1.3);
+  // proa en punta hacia el jugador (+Z)
+  add(new THREE.CylinderGeometry(5.2, 5.2, 1.8, 3), gm, 0, -0.1, 9.2, 0, Math.PI, 0, 1, 1, 1.25);
+  add(new THREE.BoxGeometry(0.35, 0.25, 9), red, 0, 1.05, 8.5, 0, 0, 0);
+  // alas laterales en flecha con borde rojo
+  for (const s of [-1, 1]) {
+    add(new THREE.BoxGeometry(9, 0.6, 7), gm2, s * 11, -0.3, -3, 0, s * 0.35, 0);
+    add(new THREE.BoxGeometry(9.4, 0.3, 0.45), red, s * 11.5, 0.05, 0.2, 0, s * 0.35, 0);
+    add(new THREE.BoxGeometry(1.2, 1.4, 6), gm3, s * 15.2, 0.1, -4.4, 0, s * 0.35, 0);
+    // luces de posición
+    add(new THREE.SphereGeometry(0.45, 8, 6), redGlow, s * 16, 0.9, -1.8);
+    add(new THREE.SphereGeometry(0.4, 8, 6), redGlow, s * 7.6, 1.3, 7);
+    // filas de ventanas rojas a lo largo del casco
+    for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.5, 0.15, 0.9), red, s * 4.9, 2.05, -7 + k * 2.2);
+  }
+  // motores en la popa (-Z)
+  const engines = [];
+  for (const x of [-5.2, -1.8, 1.8, 5.2]) {
+    add(new THREE.CylinderGeometry(1.1, 1.3, 2.4, 10), gm3, x, -0.2, -13.6, Math.PI / 2, 0, 0);
+    const fl = add(new THREE.ConeGeometry(0.95, 3.2, 10), engGlow, x, -0.2, -16.2, -Math.PI / 2, 0, 0);
+    engines.push(fl);
+  }
+  // placas y antenas para dar detalle
+  for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(10.5 - k * 1.2, 0.08, 0.18), gm3, 0, 2.03, 3 - k * 2.6);
+  add(new THREE.CylinderGeometry(0.08, 0.08, 3, 6), gm2, 1.6, 4.1, -7.5);
+  add(new THREE.SphereGeometry(0.25, 8, 6), redGlow, 1.6, 5.7, -7.5);
+
+  const TOP = 2.0;
+  const dark = std({ color: 0x14161c, metalness: 0.1, roughness: 0.85 });
+  const gun = std({ color: 0x0e1014, metalness: 0.2, roughness: 0.7 });
+  const turrets = [];
+  for (const s of [-1, 1]) {
+    // torreta sobre la cubierta, donde la busca el combate (x = ±6)
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.8, 0.9, 12), dark);
+    tBase.position.set(s * 6, TOP + 0.4, 1);
+    root.add(tBase);
+    const barrel = new THREE.Group();
+    barrel.position.set(s * 6, TOP + 1.1, 1);
+    barrel.add(new THREE.Mesh(new THREE.BoxGeometry(2.3, 1, 2.2), gun));
+    const bGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.4, 8); bGeo.rotateX(Math.PI / 2);
+    for (const dx of [-0.5, 0.5]) {
+      const b = new THREE.Mesh(bGeo, gun); b.position.set(dx, 0, 2.5); barrel.add(b);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), redGlow); tip.position.set(dx, 0, 4.2); barrel.add(tip);
+    }
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.38, 8, 6), redGlow); eye.position.set(0, 0.55, 0.7); barrel.add(eye);
+    root.add(barrel);
+    turrets.push({ base: tBase, barrel, side: s, alive: true });
+  }
+  // núcleo rojo en el centro de la cubierta, protegido por un escudo hasta que caen las torretas
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.7, 16, 12),
+    basic({ color: 0xff3a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.position.set(0, TOP + 0.7, -1.5);
+  root.add(core);
+  const armor = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    std({ color: 0x0d3a55, metalness: 0.3, roughness: 0.1, transparent: true, opacity: 0.55, emissive: 0x1aa0ff, emissiveIntensity: 0.35 }));
+  armor.position.set(0, TOP, -1.5);
+  root.add(armor);
+
+  root.userData.engines = engines;
+  root.visible = false;
+  scene.add(root);
+  return { root, turrets, core, armor, hullMesh, engines };
+}
+
+/* --- Nave nodriza steampunk (Dreadnought) --- */
 function buildBoss() {
   const root = new THREE.Group();
 
-  const hull = std({ color: 0x3a2a1a, metalness: 0.6, roughness: 0.5 });
-  const copper = std({ color: 0xb87333, metalness: 0.8, roughness: 0.3 });
-  const dark = std({ color: 0x1a1210, metalness: 0.4, roughness: 0.7 });
-  const coreGlow = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
-  const shieldMat = basic({ color: 0x44aaff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false });
+  if (_glbBoss) {
+    /* === Modelo GLB a escala de jefe (≈16 m de ancho) con torretas y núcleo encima === */
+    const model = _glbBoss.clone();
+    model.scale.set(16, 16, 16);
+    model.rotation.y = Math.PI; // proa hacia el jugador (+Z)
+    root.add(model);
+    const hullMesh = model.children[0] || model;
+    const TOP = 1.5; // cubierta (el casco mide ~3 m de alto)
 
-  // Casco principal — forma de dirigible achatado
-  const hullGeo = new THREE.BoxGeometry(16, 3, 8, 2, 1, 2);
-  // Redondear ligeramente los vértices
-  const pos = hullGeo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const fx = 1 - Math.pow(Math.abs(x) / 8, 3) * 0.3;
-    pos.setY(i, y * fx);
+    const dark = std({ color: 0x1a1d24, metalness: 0.7, roughness: 0.35 });
+    const gun = std({ color: 0x3a3f4a, metalness: 0.85, roughness: 0.3 });
+    const redGlow = basic({ color: 0xff3020, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const turrets = [];
+    for (let s = -1; s <= 1; s += 2) {
+      // torreta sobre la cubierta, en la misma posición que usa el combate (x = ±6)
+      const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.7, 0.9, 12), dark);
+      tBase.position.set(s * 6, TOP + 0.45, 1);
+      root.add(tBase);
+      const barrel = new THREE.Group();
+      barrel.position.set(s * 6, TOP + 1.1, 1);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 2), gun);
+      barrel.add(head);
+      const bGeo = new THREE.CylinderGeometry(0.2, 0.2, 3.2, 8); bGeo.rotateX(Math.PI / 2);
+      for (const dx of [-0.45, 0.45]) {
+        const b = new THREE.Mesh(bGeo, gun); b.position.set(dx, 0, 2.3); barrel.add(b);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), redGlow); tip.position.set(dx, 0, 3.9); barrel.add(tip);
+      }
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), redGlow); eye.position.set(0, 0.5, 0.6); barrel.add(eye);
+      root.add(barrel);
+      turrets.push({ base: tBase, barrel, side: s, alive: true });
+    }
+    // núcleo rojo en el centro de la cubierta…
+    const coreGlow = basic({ color: 0xff3a2a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(1.6, 16, 12), coreGlow);
+    core.position.set(0, TOP + 0.6, 0);
+    root.add(core);
+    // …protegido por un escudo de energía hasta que caen las dos torretas
+    const armor = new THREE.Mesh(new THREE.SphereGeometry(2.8, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      basic({ color: 0x40d0ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+    armor.position.set(0, TOP, 0);
+    root.add(armor);
+
+    root.visible = false;
+    scene.add(root);
+    return { root, turrets, core, armor, hullMesh };
+  }
+
+  /* === Fallback procedural === */
+
+  /* --- Materiales --- */
+  const hull    = std({ color: 0x3a2a1a, metalness: 0.65, roughness: 0.45 });
+  const hullD   = std({ color: 0x2a1c10, metalness: 0.55, roughness: 0.55 });
+  const copper  = std({ color: 0xb87333, metalness: 0.85, roughness: 0.25 });
+  const brass   = std({ color: 0xd4a84b, metalness: 0.9,  roughness: 0.2 });
+  const dark    = std({ color: 0x1a1210, metalness: 0.4,  roughness: 0.7 });
+  const iron    = std({ color: 0x555555, metalness: 0.7,  roughness: 0.4 });
+  const coreGlow   = basic({ color: 0xff4444, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
+  const orangeGlow = basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+  const steamGlow  = basic({ color: 0xffddaa, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  /* ========== CASCO PRINCIPAL — dirigible acorazado ========== */
+  const hullGeo = new THREE.BoxGeometry(18, 3.5, 9, 3, 1, 3);
+  const hp = hullGeo.attributes.position;
+  for (let i = 0; i < hp.count; i++) {
+    const x = hp.getX(i), y = hp.getY(i), z = hp.getZ(i);
+    // Proa redondeada, popa cuadrada
+    const tz = (z + 4.5) / 9;
+    const taperZ = tz > 0.6 ? 1 : 0.5 + 0.5 * (tz / 0.6);
+    const taperX = 1 - 0.25 * Math.pow(Math.abs(x) / 9, 2.5);
+    hp.setX(i, x * taperZ);
+    hp.setY(i, y * taperX * (0.85 + 0.15 * Math.cos(Math.PI * (tz - 0.5))));
   }
   hullGeo.computeVertexNormals();
   const hullMesh = new THREE.Mesh(hullGeo, hull);
   root.add(hullMesh);
 
-  // Superestructura (puente de mando arriba)
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 3), dark);
-  bridge.position.set(0, 2, 0);
-  root.add(bridge);
+  // Quilla inferior (keel)
+  const keel = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 8), hullD);
+  keel.position.set(0, -2.0, 0);
+  root.add(keel);
 
-  // Chimeneas steampunk
-  for (let i = -1; i <= 1; i += 2) {
-    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3, 8), copper);
-    chimney.position.set(i * 3, 3.5, -1);
-    root.add(chimney);
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.5, 0.4, 8), copper);
-    rim.position.set(i * 3, 5, -1);
-    root.add(rim);
+  // Cinturón blindado lateral (belt armor)
+  for (let s = -1; s <= 1; s += 2) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.8, 7.5), iron);
+    belt.position.set(s * 8.8, -0.5, 0.3);
+    root.add(belt);
+    // Remaches decorativos (esferas pequeñas)
+    for (let rz = -3; rz <= 3; rz += 1.5) {
+      const rivet = new THREE.Mesh(new THREE.SphereGeometry(0.12, 4, 4), brass);
+      rivet.position.set(s * 9.05, -0.5, rz);
+      root.add(rivet);
+    }
   }
 
-  // Engranajes decorativos (laterales)
-  for (let i = -1; i <= 1; i += 2) {
-    const gear = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.2, 6, 12), copper);
-    gear.position.set(i * 8.2, 0, 0);
-    gear.rotation.y = Math.PI / 2;
-    root.add(gear);
+  /* ========== SUPERESTRUCTURA ========== */
+  // Puente de mando (escalonado)
+  const bridge1 = new THREE.Mesh(new THREE.BoxGeometry(5, 1.5, 3.5), dark);
+  bridge1.position.set(0, 2.2, 0.5);
+  root.add(bridge1);
+  const bridge2 = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.2, 2.2), dark);
+  bridge2.position.set(0, 3.4, 0.5);
+  root.add(bridge2);
+  // Ventanas del puente (tira de luz)
+  const bridgeWin = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.25, 0.1), steamGlow);
+  bridgeWin.position.set(0, 2.6, 2.3);
+  root.add(bridgeWin);
+
+  // Mástil con antena
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.5, 4), iron);
+  mast.position.set(0, 5.2, 0.5);
+  root.add(mast);
+  const antenna = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 4), brass);
+  antenna.position.set(0, 6.5, 0.5);
+  root.add(antenna);
+
+  /* ========== CHIMENEAS STEAMPUNK (3 pares) ========== */
+  const chimPositions = [[-3, -1.2], [-1, -0.5], [1.5, -1.5]];
+  chimPositions.forEach(([cx, cz]) => {
+    for (let s = -1; s <= 1; s += 2) {
+      const h = 2.5 + Math.random() * 1.5;
+      const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, h, 8), copper);
+      chimney.position.set(s * Math.abs(cx), 1.75 + h / 2, cz);
+      root.add(chimney);
+      // Anillo superior
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.4, 0.35, 8), brass);
+      rim.position.set(s * Math.abs(cx), 1.75 + h + 0.17, cz);
+      root.add(rim);
+      // "Humo" glow
+      const smoke = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), steamGlow);
+      smoke.position.set(s * Math.abs(cx), 1.75 + h + 0.6, cz);
+      root.add(smoke);
+    }
+  });
+
+  /* ========== ENGRANAJES LATERALES (grandes + pequeños) ========== */
+  for (let s = -1; s <= 1; s += 2) {
+    const gearBig = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.22, 6, 14), copper);
+    gearBig.position.set(s * 9.2, 0, -0.5);
+    gearBig.rotation.y = Math.PI / 2;
+    root.add(gearBig);
+    // Hub central del engranaje
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8), brass);
+    hub.rotation.z = Math.PI / 2;
+    hub.position.set(s * 9.2, 0, -0.5);
+    root.add(hub);
+    // Engranaje pequeño
+    const gearSm = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.15, 6, 10), copper);
+    gearSm.position.set(s * 9.2, 1.6, -0.5);
+    gearSm.rotation.y = Math.PI / 2;
+    root.add(gearSm);
+    // Cadena (cilindro fino)
+    const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.4, 4), iron);
+    chain.position.set(s * 9.2, 0.8, -0.5);
+    root.add(chain);
   }
 
-  // Torretas laterales
+  /* ========== TORRETAS LATERALES (artillería pesada) ========== */
   const turrets = [];
-  for (let i = -1; i <= 1; i += 2) {
-    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.2, 1.5, 8), dark);
-    tBase.position.set(i * 6, -1.5, 0);
+  for (let s = -1; s <= 1; s += 2) {
+    // Base giratoria
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.5, 1.2, 10), dark);
+    tBase.position.set(s * 6.5, -1.5, 1);
     root.add(tBase);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3, 6), copper);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(i * 6, -1.5, 2.5);
+    // Escudo de torreta
+    const shield = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 1.8), iron);
+    shield.position.set(s * 6.5, -1, 1.8);
+    root.add(shield);
+    // Cañón doble
+    const barrelGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.5, 6);
+    barrelGeo.rotateX(Math.PI / 2);
+    const barrel1 = new THREE.Mesh(barrelGeo, copper);
+    barrel1.position.set(s * 6.5 + s * 0.4, -1, 3.3);
+    root.add(barrel1);
+    const barrel2 = new THREE.Mesh(barrelGeo.clone(), copper);
+    barrel2.position.set(s * 6.5 - s * 0.4, -1, 3.3);
+    root.add(barrel2);
+    // Boca de fuego (glow)
+    const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 4), orangeGlow);
+    muzzle.position.set(s * 6.5, -1, 5.0);
+    root.add(muzzle);
+    // barrel ref = barrel1 for hiding
+    const barrel = new THREE.Group();
+    barrel.add(barrel1); barrel.add(barrel2); barrel.add(muzzle); barrel.add(shield);
     root.add(barrel);
-    turrets.push({ base: tBase, barrel, side: i, alive: true });
+    turrets.push({ base: tBase, barrel, side: s, alive: true });
   }
 
-  // Núcleo central (debajo del casco)
-  const core = new THREE.Mesh(new THREE.SphereGeometry(1.8, 12, 8), coreGlow);
-  core.position.set(0, -2.5, 0);
+  /* ========== NÚCLEO DE ENERGÍA (debajo del casco) ========== */
+  const core = new THREE.Mesh(new THREE.SphereGeometry(2.0, 14, 10), coreGlow);
+  core.position.set(0, -2.8, 0);
   root.add(core);
+  // Anillo de contención alrededor del núcleo
+  const coreRing = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.15, 6, 16), copper);
+  coreRing.position.set(0, -2.8, 0);
+  coreRing.rotation.x = Math.PI / 2;
+  root.add(coreRing);
+  const coreRing2 = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.12, 6, 16), brass);
+  coreRing2.position.set(0, -2.8, 0);
+  coreRing2.rotation.z = Math.PI / 3;
+  root.add(coreRing2);
 
-  // Coraza que protege el núcleo (fase 1)
-  const armor = new THREE.Mesh(new THREE.BoxGeometry(6, 1.2, 5), hull);
-  armor.position.set(0, -2, 0);
+  /* ========== CORAZA PROTECTORA (fase 1) ========== */
+  const armorGeo = new THREE.BoxGeometry(7, 1.5, 5.5, 2, 1, 2);
+  const ap = armorGeo.attributes.position;
+  for (let i = 0; i < ap.count; i++) {
+    const x = ap.getX(i);
+    ap.setY(i, ap.getY(i) * (1 - 0.15 * Math.pow(Math.abs(x) / 3.5, 2)));
+  }
+  armorGeo.computeVertexNormals();
+  const armor = new THREE.Mesh(armorGeo, hull);
+  armor.position.set(0, -2.2, 0);
   root.add(armor);
+  // Planchas de blindaje extra
+  for (let az = -1.5; az <= 1.5; az += 1.5) {
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.15, 1.2), iron);
+    plate.position.set(0, -1.5, az);
+    root.add(plate);
+  }
 
-  // Propulsores inferiores
-  for (let i = -1; i <= 1; i += 2) {
-    const prop = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 1, 8), copper);
-    prop.position.set(i * 5, -2.5, -2);
-    root.add(prop);
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2, 8), basic({ color: 0xff8833, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-    flame.position.set(i * 5, -4, -2);
+  /* ========== PROPULSORES (4 motores con llamas) ========== */
+  const propPositions = [[-5.5, -2], [5.5, -2], [-3, -3], [3, -3]];
+  propPositions.forEach(([px, pz]) => {
+    // Carcasa
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 1.2, 8), copper);
+    housing.position.set(px, -2.2, pz);
+    root.add(housing);
+    // Tobera interior
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.3, 0.4, 8), dark);
+    nozzle.position.set(px, -2.9, pz);
+    root.add(nozzle);
+    // Llama
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.2, 8), orangeGlow);
+    flame.position.set(px, -4.2, pz);
     flame.rotation.x = Math.PI;
     root.add(flame);
+  });
+
+  /* ========== PROA (espolón) ========== */
+  const ram = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3, 6), iron);
+  ram.rotation.x = Math.PI / 2;
+  ram.position.set(0, -0.5, 6);
+  root.add(ram);
+  // Decoración proa
+  const ramRing = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.1, 6, 10), brass);
+  ramRing.position.set(0, -0.5, 5);
+  root.add(ramRing);
+
+  /* ========== DETALLES DECORATIVOS ========== */
+  // Tuberías laterales
+  for (let s = -1; s <= 1; s += 2) {
+    for (let pz = -2; pz <= 2; pz += 2) {
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 2.5, 6), copper);
+      pipe.rotation.z = Math.PI / 2;
+      pipe.position.set(s * 7, 1.2, pz);
+      root.add(pipe);
+    }
+    // Ojo de buey (porthole) — torus pequeño
+    for (let pz = -2; pz <= 2; pz += 2) {
+      const port = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.06, 6, 8), brass);
+      port.position.set(s * 9.1, 0.3, pz);
+      port.rotation.y = Math.PI / 2;
+      root.add(port);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), steamGlow);
+      glass.position.set(s * 9.05, 0.3, pz);
+      glass.rotation.y = s > 0 ? Math.PI / 2 : -Math.PI / 2;
+      root.add(glass);
+    }
   }
 
   root.visible = false;
@@ -10311,17 +11136,23 @@ function buildBoss() {
 /* ============================================================
    PROYECTILES
    ============================================================ */
-const _bulletGeo = new THREE.SphereGeometry(0.15, 4, 4);
-const _bulletMat = basic({ color: 0xffd23f, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
-const _bombGeo = new THREE.SphereGeometry(0.3, 6, 6);
+const _bulletGeo = new THREE.CylinderGeometry(0.32, 0.32, 3.6, 6);
+_bulletGeo.rotateX(Math.PI / 2);
+const _bulletMat = basic({ color: 0xffe14a, blending: THREE.AdditiveBlending, transparent: true, opacity: 1, depthWrite: false });
+const _bulletGlowGeo = new THREE.CylinderGeometry(0.95, 0.95, 4.6, 8);
+_bulletGlowGeo.rotateX(Math.PI / 2);
+const _bulletGlowMat = basic({ color: 0xff8a00, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.45, depthWrite: false });
+const _bombGeo = new THREE.SphereGeometry(0.55, 10, 8);
 const _bombMat = basic({ color: 0xff6b2b, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
-const _missileGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.2, 6);
+const _missileGeo = new THREE.CylinderGeometry(0.2, 0.2, 2, 6);
 _missileGeo.rotateX(Math.PI / 2);
-const _missileMat = basic({ color: 0xff2bd6, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9, depthWrite: false });
+const _missileMat = basic({ color: 0xff2bd6 });
 
 function spawnBullet(x, z) {
   const mesh = new THREE.Mesh(_bulletGeo, _bulletMat);
-  mesh.position.set(x, 0.8, z);
+  mesh.add(new THREE.Mesh(_bulletGlowGeo, _bulletGlowMat));
+  mesh.renderOrder = 9;
+  mesh.position.set(x, 1.0, z);
   scene.add(mesh);
   return { mesh, x, z, speed: SPY.GUN_SPEED, dmg: SPY.GUN_DMG };
 }
@@ -10349,8 +11180,8 @@ function spawnMissile(x, z, targetX, targetZ) {
 // Indicadores de ataque (marcadores en el suelo/aire)
 const _warnGeo = new THREE.PlaneGeometry(1, 1);
 _warnGeo.rotateX(-Math.PI / 2);
-const _warnMatBeam = basic({ color: 0xff4444, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
-const _warnMatArea = basic({ color: 0xffaa22, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+const _warnMatBeam = basic({ color: 0xff1a1a, transparent: true, opacity: 0.5, depthWrite: false });
+const _warnMatArea = basic({ color: 0xff7a00, transparent: true, opacity: 0.4, depthWrite: false });
 
 function bossBeamAttack() {
   // Rayo que barre una franja horizontal
@@ -10373,7 +11204,7 @@ function bossAreaAttack() {
     const cx = -SPY.AIR_FIELD_W / 2 + spacing * (i + 0.5);
     const cz = spy.boss.root.position.z + rand(5, 15);
     const r = 3.5;
-    const warn = new THREE.Mesh(new THREE.CircleGeometry(r, 16), _warnMatArea.clone());
+    const warn = new THREE.Mesh(new THREE.PlaneGeometry(r * 2, r * 2), _warnMatArea.clone());
     warn.rotation.x = -Math.PI / 2;
     warn.position.set(cx, SPY.AIR_Y - 0.5, cz);
     scene.add(warn);
@@ -10388,9 +11219,13 @@ function bossAreaAttack() {
    ============================================================ */
 
 function spyReset() {
+  spy.gen++;            // cancela temporizadores pendientes de la partida anterior
+  spy.ended = false;
+  spy.bossDying = false;
   spy.phase = 'off';
   spy.hp = SPY.HP_MAX;
   spy.lastDmg = 0;
+  spy.iframes = 0;
   spy.pieces = 0;
   spy.weapon = 0;
   spy.score = 0;
@@ -10400,17 +11235,21 @@ function spyReset() {
   spy.gunCd = 0;
   spy.bombCd = 0;
   spy.transformT = 0;
+  cleanupTransformParts();
   spy.bossPhase = 1;
   spy.turretHP = [SPY.TURRET_HP, SPY.TURRET_HP];
   spy.coreHP = SPY.CORE_HP;
-  spy.attacks = [];
   spy.attackCd = 2;
   spy.bossT = 0;
   spy.missileCd = 0;
   spy.planeX = 0;
   spy.planeZ = 0;
+  spy.airWave = 0;
+  spy.airWaveDelay = 0;
 
   // Limpiar entidades
+  spy.airEnemies.forEach(e => scene.remove(e.model.root));
+  spy.airEnemies = [];
   spy.enemies.forEach(e => { if (e.model) scene.remove(e.model.root); });
   spy.enemies = [];
   spy.pieceCars.forEach(p => { if (p.model) scene.remove(p.model.root); });
@@ -10425,9 +11264,21 @@ function spyReset() {
     if (a.warn) scene.remove(a.warn);
     if (a.zones) a.zones.forEach(z => scene.remove(z.warn));
   });
+  spy.attacks = [];
 
-  if (spy.plane) { spy.plane.root.visible = false; }
+  if (spy.plane) { spy.plane.root.visible = false; spy.plane.root.scale.setScalar(1); }
   if (spy.boss) { spy.boss.root.visible = false; }
+  spy.tf = null; spy.pendingTf = false; spy.fire = false; spy.camInit = false;
+  if (typeof _tfHide === 'function') _tfHide();
+  if (typeof spyWhite === 'function') spyWhite(0, 1);
+  if (typeof spyAirEnv === 'function') spyAirEnv(false);
+}
+
+/* Temporizador ligado a la partida: si se sale al menú o se empieza otra partida
+   antes de que dispare, se descarta (evita que termine una partida ajena). */
+function spyLater(fn, ms) {
+  const g = spy.gen;
+  setTimeout(() => { if (spy.gen === g && spy.mode) fn(); }, ms);
 }
 
 function spyStart() {
@@ -10437,7 +11288,7 @@ function spyStart() {
 
   // Construir modelos que necesitemos (lazy)
   if (!spy.plane) spy.plane = buildPlane();
-  if (!spy.boss) spy.boss = buildBoss();
+  if (!spy.boss) spy.boss = buildBossV2();
 
   // HUD
   spyShowHUD(true);
@@ -10445,6 +11296,8 @@ function spyStart() {
 }
 
 function spyEnd(won) {
+  if (spy.ended) return;   // evita repetir bonus/insignia/fin de partida
+  spy.ended = true;
   spy.phase = won ? 'win' : 'dead';
   if (won) {
     // Badge: SPY HUNTER
@@ -10462,7 +11315,7 @@ function spyEnd(won) {
     toast('BOSS DESTROYED!', '+5000 bonus', '#ffd23f');
     AudioSys.sfx('powerup');
   }
-  setTimeout(() => {
+  spyLater(() => {
     // Usar el sistema de game over normal
     run.score = spy.score;
     endRun();
@@ -10490,6 +11343,7 @@ function spyShowHUD(show) {
         <span class="sp" id="sp3">✈️</span>
       </div>
       <div class="spy-weapon" id="spy-weapon"></div>
+      <div class="spy-key">FIRE: F · J · K</div>
       <div class="spy-boss" id="spy-bosshud" style="display:none">
         <div class="sb-name">MOTHERSHIP</div>
         <div class="sb-bar"><i id="sb-fill"></i></div>
@@ -10497,9 +11351,13 @@ function spyShowHUD(show) {
       </div>
     `;
     document.getElementById('hud').appendChild(hud);
+    // la barra del jefe va arriba en el centro, fuera del panel lateral
+    document.getElementById('hud').appendChild(hud.querySelector('#spy-bosshud'));
     spy.hudEl = hud;
   }
   if (hud) hud.style.display = show ? 'block' : 'none';
+  const bh = document.getElementById('spy-bosshud');
+  if (bh && !show) bh.style.display = 'none';
 }
 
 function spyUpdateHUD() {
@@ -10521,8 +11379,9 @@ function spyUpdateHUD() {
   // Arma actual
   const wEl = document.getElementById('spy-weapon');
   if (wEl) {
-    const names = ['', '🔫 MACHINE GUN', '🔫💣 + BOMBS', '🔫💣🚀 + MISSILES'];
-    wEl.textContent = names[spy.weapon] || '';
+    const air = spy.phase === 'air' || spy.phase === 'boss';
+    const names = ['NO WEAPON — RAM A PIECE CAR', '🔫 MACHINE GUN', '💣 BOMBS', '🚀 MISSILES'];
+    wEl.textContent = air ? '🚀 AIR MISSILES' : names[spy.weapon];
   }
 
   // Boss HUD
@@ -10547,6 +11406,17 @@ function spyUpdateHUD() {
 function spyUpdateGround(dt) {
   const dist = run.dist;
 
+  // --- Iframes (invulnerabilidad) ---
+  if (spy.iframes > 0) {
+    spy.iframes -= dt;
+    // Parpadeo visual del coche cuando invulnerable
+    if (playerModel && playerModel.root) {
+      playerModel.root.visible = Math.sin(spy.iframes * 20) > 0;
+    }
+  } else if (playerModel && playerModel.root) {
+    playerModel.root.visible = true;
+  }
+
   // --- Regeneración ---
   spy.lastDmg += dt;
   if (spy.lastDmg > SPY.REGEN_DELAY && spy.hp < SPY.HP_MAX) {
@@ -10557,15 +11427,21 @@ function spyUpdateGround(dt) {
   spy.nextEnemy -= dt;
   if (spy.nextEnemy <= 0) {
     spy.nextEnemy = SPY.ENEMY_INTERVAL * rand(0.7, 1.3);
-    const lane = randInt(0, 3);
-    const model = buildEnemyCar();
-    const e = {
-      model, lane, x: LANES[lane], z: SPAWN_Z,
-      speed: rand(SPY.ENEMY_SPEED_MIN, SPY.ENEMY_SPEED_MAX),
-      hp: 3, charging: false, chargeT: 0
-    };
-    model.root.position.set(e.x, 0, e.z);
-    spy.enemies.push(e);
+    if (spy.enemies.length < 2) {
+      const model = buildEnemyCar();
+      const behind = Math.random() < 0.6;
+      const side = spyPickSide();
+      const e = {
+        model, x: clamp(player.x + side * 5, -7, 7), z: behind ? 22 : -95,
+        speed: player.speed + (behind ? 16 : -14),
+        hp: 3, state: 'approach', side, t: 0, wait: rand(0.5, 1.1), vx: 0,
+        charging: false, charged: false, chargeT: 0, chargeVelZ: 0, chargeTargetX: 0, hitCd: 0
+      };
+      model.root.position.set(e.x, 0, e.z);
+      scene.add(model.root);
+      spy.enemies.push(e);
+      if (behind) toast('⚠ HOSTILE BEHIND', 'it will try to ram you', '#ff3b5c');
+    }
   }
 
   // --- Spawn coches de pieza ---
@@ -10578,7 +11454,9 @@ function spyUpdateGround(dt) {
         model, lane, x: LANES[lane], z: SPAWN_Z,
         speed: rand(28, 34), hp: 3, pieceIndex: spy.nextPiece
       };
+      p.z = -140; p.speed = player.speed - 20;
       model.root.position.set(p.x, 0, p.z);
+      scene.add(model.root);
       spy.pieceCars.push(p);
       toast('⚡ PIECE CAR AHEAD', SPY.PIECE_NAMES[spy.nextPiece], SPY.PIECE_COLORS[spy.nextPiece] ? '#' + SPY.PIECE_COLORS[spy.nextPiece].toString(16).padStart(6, '0') : '#ffd23f');
     }
@@ -10588,36 +11466,94 @@ function spyUpdateGround(dt) {
   for (let i = spy.enemies.length - 1; i >= 0; i--) {
     const e = spy.enemies[i];
 
-    // Mover hacia el jugador (embestida)
-    const dz = player.speed - e.speed;
-    e.z += dz * dt;
+    // === IA: se pone a tu lado, avisa y te embiste de lado; luego se adelanta ===
+    if (e.state === 'ram' && !e.charged) { e.state = 'retreat'; e.t = 0; } // una bala/bomba cortó la embestida
+    e.t += dt;
+    let zT = -0.5;
+    if (e.state === 'retreat') zT = -18;
+    // velocidad con aceleración limitada: si frenas o aceleras de golpe, se te escapa
+    const want = player.speed + clamp((e.z - zT) * 1.4, -22, 22);
+    e.speed += clamp(want - e.speed, -16 * dt, 16 * dt);
+    e.z += (player.speed - e.speed) * dt;
+    const tx = clamp(player.x + e.side * 3.6, -7.2, 7.2);
+    if (e.state === 'approach' || e.state === 'shadow') {
+      if (Math.abs(tx - player.x) < 2.6) { e.side = -e.side; }
+      e.x += clamp(tx - e.x, -10 * dt, 10 * dt);
+      const close = Math.abs(e.z - zT) < 2.8 && Math.abs(e.x - tx) < 1.2;
+      if (close) { if (e.state !== 'shadow') { e.state = 'shadow'; e.t = 0; } if (e.t > e.wait) { e.state = 'warn'; e.t = 0; } }
+      else if (e.state === 'shadow') e.state = 'approach';
+    } else if (e.state === 'warn') {
+      // coge impulso hacia fuera y parpadea en rojo
+      e.x += clamp(tx + e.side * 0.8 - e.x, -6 * dt, 6 * dt);
+      e.chargeT = e.t;
+      if (Math.random() < 0.5) burst(e.x + rand(-0.8, 0.8), 0.1, e.z + 2, 2, { colors: [[1, 0.6, 0.2], [1, 0.9, 0.4]], speed: 4, up: 2, life: 0.2, size: 0.15, spread: 0.4, grav: 15 });
+      if (e.t > SPY.ENEMY_WARN_TIME) { e.state = 'ram'; e.t = 0; e.vx = -e.side * 26; AudioSys.sfx('nitro'); }
+    } else if (e.state === 'ram') {
+      e.x += e.vx * dt;
+      if (Math.random() < 0.7) burst(e.x, 0.5, e.z + 2, 3, { colors: [[1, 0.3, 0], [1, 0.6, 0.1], [1, 0.9, 0.3]], speed: 5, up: 2, life: 0.3, size: 0.35, spread: 0.3, grav: 3, vz: 6 });
+      if (e.t > 0.55 || Math.abs(e.x) > 8.5) { e.state = 'retreat'; e.t = 0; }
+    } else if (e.state === 'retreat') {
+      // se adelanta: es tu momento para dispararle
+      e.x += clamp(LANES[e.x < 0 ? 0 : 3] * 0.5 - e.x, -5 * dt, 5 * dt);
+      if (e.t > 2.4) { e.state = 'approach'; e.t = 0; e.side = spyPickSide(); e.wait = rand(0.4, 1); }
+    }
+    e.x = clamp(e.x, -8.5, 8.5);
+    e.charging = e.state === 'warn';
+    e.charged = e.state === 'ram';
 
-    // Persecución lateral
-    const targetX = player.x;
-    const dx = targetX - e.x;
-    if (Math.abs(dx) > 0.5) {
-      e.x += Math.sign(dx) * 8 * dt;
+    // Inclinar el modelo según movimiento (bank visual)
+    const lateralVel = (player.x - e.x);
+    e.model.body.rotation.z = clamp(lateralVel * 0.05, -0.15, 0.15);
+    // Pitch del coche durante la carga (morro abajo = agresividad)
+    if (e.charged) {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, -0.08, 5 * dt);
+    } else if (e.charging && e.chargeT < SPY.ENEMY_WARN_TIME) {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, 0.06, 5 * dt); // levanta morro al frenar
+    } else {
+      e.model.body.rotation.x = lerp(e.model.body.rotation.x, 0, 3 * dt);
     }
 
     e.model.root.position.set(e.x, 0, e.z);
 
     // Fuera de rango
-    if (e.z > 40 || e.z < -400) {
+    if (e.z > 60 || e.z < -400) {
       scene.remove(e.model.root);
       spy.enemies.splice(i, 1);
       continue;
     }
 
+    // Cooldown de colisión
+    if (e.hitCd > 0) e.hitCd -= dt;
+
     // Colisión con jugador
-    if (Math.abs(e.x - player.x) < 2 && Math.abs(e.z) < 3.5) {
-      spyDamage(SPY.DMG_ENEMY);
-      // Knockback al enemigo
-      e.z = -15;
-      e.speed = player.speed * 0.6;
-      flash('#ff3b5c');
-      shake = 0.6;
+    if (e.hitCd <= 0 && Math.abs(e.x - player.x) < 2.1 && Math.abs(e.z) < 3.6) {
+      const wasCharging = e.charged;
+      const dmg = wasCharging ? Math.round(SPY.DMG_ENEMY * 1.3) : SPY.DMG_ENEMY;
+      spyDamage(dmg);
+      // Knockback al enemigo — más si estaba cargando
+      e.x += Math.sign(e.x - player.x || e.side) * 2.5;
+      e.state = 'retreat'; e.t = 0;
+      e.charged = false;
+      e.charging = false;
+      e.chargeVelZ = 0;
+      e.hitCd = 2; // 2s sin poder volver a golpear
+      flash(wasCharging ? '#ff0000' : '#ff3b5c');
+      shake = wasCharging ? 1.2 : 0.6;
       AudioSys.sfx('crash');
-      burst(player.x, 1, -1, 20, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2]], speed: 10, up: 6, life: 0.6, size: 0.4, spread: 0.5, grav: 10 });
+      // Más partículas si fue carga
+      const pn = wasCharging ? 35 : 20;
+      burst(player.x, 1, -1, pn, {
+        colors: [[1, 0.3, 0.1], [1, 0.6, 0.2], [1, 1, 0.5]],
+        speed: wasCharging ? 16 : 10, up: wasCharging ? 10 : 6,
+        life: wasCharging ? 0.8 : 0.6, size: wasCharging ? 0.6 : 0.4,
+        spread: 0.5, grav: 10
+      });
+      if (wasCharging) {
+        // Impacto extra: empujón lateral al jugador
+        player.x += Math.sign(e.x - player.x) * rand(1.5, 3);
+        player.x = clamp(player.x, LANES[0] - 1, LANES[3] + 1);
+        toast('💥 RAM ATTACK!', '-' + dmg + ' HP', '#ff0000');
+      }
     }
 
     // Hit por balas
@@ -10627,12 +11563,19 @@ function spyUpdateGround(dt) {
         e.hp -= b.dmg;
         scene.remove(b.mesh);
         spy.bullets.splice(j, 1);
-        burst(e.x, 1, e.z, 8, { colors: [[1, 0.8, 0.3]], speed: 6, up: 4, life: 0.3, size: 0.3, spread: 0.3, grav: 8 });
+        burst(e.x, 1.2, e.z + 1.5, 14, { colors: [[1, 0.9, 0.4], [1, 0.5, 0.1], [1, 1, 1]], speed: 9, up: 5, life: 0.35, size: 0.55, spread: 0.4, grav: 8 });
+        e.flash = 0.12;
+        // Las balas interrumpen la carga
+        if (e.charging || e.charged) {
+          e.charging = false;
+          e.charged = false;
+          e.chargeVelZ = 0;
+        }
         if (e.hp <= 0) {
           scene.remove(e.model.root);
           spy.enemies.splice(i, 1);
-          spy.score += 100;
-          addScore(100);
+          spy.score += e.charged ? 150 : 100;
+          addScore(e.charged ? 150 : 100);
           burst(e.x, 1, e.z, 30, { colors: [[1, 0.5, 0.1], [1, 0.8, 0.3], [1, 1, 0.7]], speed: 14, up: 8, life: 0.8, size: 0.5, spread: 0.5, grav: 12 });
           AudioSys.sfx('powerup');
           break;
@@ -10640,33 +11583,84 @@ function spyUpdateGround(dt) {
       }
     }
 
-    // Parpadeo de luz roja del enemigo
+    // Impacto de bombas (daño en área)
+    if (spy.enemies[i] === e) {
+      for (let j = spy.bombProjs.length - 1; j >= 0; j--) {
+        const b = spy.bombProjs[j];
+        if (Math.abs(b.x - e.x) < b.radius * 0.6 && Math.abs(b.z - e.z) < b.radius) {
+          scene.remove(b.mesh); spy.bombProjs.splice(j, 1);
+          burst(b.x, 1, b.z, 26, { colors: [[1, 0.5, 0.1], [1, 0.8, 0.3]], speed: 12, up: 8, life: 0.6, size: 0.6, spread: 0.6, grav: 10 });
+          shake = Math.max(shake, 0.3);
+          e.hp -= b.dmg; e.charging = false; e.charged = false; e.chargeVelZ = 0;
+          if (e.hp <= 0) {
+            scene.remove(e.model.root); spy.enemies.splice(i, 1);
+            spy.score += 100; addScore(100);
+            burst(e.x, 1, e.z, 30, { colors: [[1, 0.5, 0.1], [1, 0.8, 0.3], [1, 1, 0.7]], speed: 14, up: 8, life: 0.8, size: 0.5, spread: 0.5, grav: 12 });
+            AudioSys.sfx('powerup');
+          }
+          break;
+        }
+      }
+    }
+    if (spy.enemies[i] !== e) continue;
+
+    // Parpadeo de luz roja del enemigo (más rápido si cerca)
     if (e.model.warn) {
-      e.model.warn.material.opacity = 0.5 + Math.sin(simTime * 12) * 0.4;
+      const urgency = e.charging ? 24 : (e.charged ? 18 : 8);
+      const brightness = e.charging || e.charged ? 1 : 0.7;
+      e.model.warn.material.opacity = brightness * (0.5 + Math.sin(simTime * urgency) * 0.5);
+      if (!e.charging) e.model.warn.scale.setScalar(1);
+    }
+    // Underglow rojo pulsa
+    if (e.model.underglow) {
+      const ugBright = e.charging ? 0.6 : (e.charged ? 0.5 : 0.25);
+      e.model.underglow.material.opacity = ugBright + Math.sin(simTime * 6) * 0.1;
     }
   }
 
   // --- Update coches de pieza ---
   for (let i = spy.pieceCars.length - 1; i >= 0; i--) {
     const p = spy.pieceCars[i];
-    const dz = player.speed - p.speed;
-    p.z += dz * dt;
+    // lejos: se acerca deprisa; cerca: se deja alcanzar despacio
+    p.speed = player.speed - (p.z < -35 ? 28 : 5);
+    p.z += (player.speed - p.speed) * dt;
     p.model.root.position.set(p.x, 0, p.z);
 
-    // Icono flotante
-    if (p.model.icon) {
-      p.model.icon.rotation.y += 2 * dt;
-      p.model.icon.position.y = 2.8 + Math.sin(simTime * 3) * 0.3;
+    // Animación visual del coche de pieza
+    const m = p.model;
+    if (m.icon) {
+      m.icon.rotation.y += 3 * dt;
+      m.icon.position.y = 3.5 + Math.sin(simTime * 3) * 0.4;
+      m.icon.scale.setScalar(0.8 + Math.sin(simTime * 5) * 0.2);
+    }
+    if (m.ring) m.ring.rotation.z += 2.5 * dt;
+    if (m.ring2) m.ring2.rotation.z -= 1.8 * dt;
+    if (m.beacon) {
+      m.beaconMat.opacity = 0.2 + Math.sin(simTime * 4) * 0.15;
+    }
+    if (m.halo) {
+      const hp = 0.5 + 0.5 * Math.sin(simTime * 6);
+      m.haloMat.opacity = 0.25 + 0.35 * hp;
+      m.halo.scale.setScalar(0.9 + 0.2 * hp);
+      m.label.position.y = 4.2 + Math.sin(simTime * 3) * 0.25;
+    }
+    if (m.pulse) {
+      const pt = (simTime * 0.8) % 1;  // ciclo 0→1
+      const sc = 1 + pt * 5;
+      m.pulse.scale.set(sc, sc, 1);
+      m.pulseMat.opacity = 0.5 * (1 - pt);
     }
 
     // Fuera de rango → reaparece más adelante
-    if (p.z > 60) {
-      p.z = SPAWN_Z;
+    if (p.z > 25) {
+      // te lo has pasado: vuelve a aparecer por delante
+      p.z = -140;
+      toast('↻ PIECE CAR IS BACK', SPY.PIECE_NAMES[p.pieceIndex], '#00f0ff');
       p.lane = randInt(0, 3);
       p.x = LANES[p.lane];
     }
     if (p.z < -400) {
-      p.z = SPAWN_Z;
+      p.z = -140;
       p.lane = randInt(0, 3);
       p.x = LANES[p.lane];
     }
@@ -10675,7 +11669,7 @@ function spyUpdateGround(dt) {
     if (Math.abs(p.x - player.x) < 2.2 && Math.abs(p.z) < 3.5) {
       // Recoger pieza
       spy.pieces = p.pieceIndex + 1;
-      spy.weapon = Math.min(3, spy.pieces);
+      spyEquip(p.pieceIndex);
       spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.HEAL_PIECE);
       spy.nextPiece = spy.pieces;
 
@@ -10688,9 +11682,7 @@ function spyUpdateGround(dt) {
 
       // ¿Transformación?
       if (spy.pieces >= 4) {
-        spy.phase = 'transform';
-        spy.transformT = 0;
-        toast('🛩️ TRANSFORMATION!', 'Taking flight...', '#ff2bd6');
+        spy.pendingTf = true;
       }
       continue;
     }
@@ -10706,7 +11698,7 @@ function spyUpdateGround(dt) {
         if (p.hp <= 0) {
           // Pieza salta como pickup
           spy.pieces = p.pieceIndex + 1;
-          spy.weapon = Math.min(3, spy.pieces);
+          spyEquip(p.pieceIndex);
           spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.HEAL_PIECE);
           spy.nextPiece = spy.pieces;
 
@@ -10718,8 +11710,7 @@ function spyUpdateGround(dt) {
           spy.pieceCars.splice(i, 1);
 
           if (spy.pieces >= 4) {
-            spy.phase = 'transform';
-            spy.transformT = 0;
+            spy.pendingTf = true;
           }
           break;
         }
@@ -10727,28 +11718,21 @@ function spyUpdateGround(dt) {
     }
   }
 
-  // --- Disparar armas ---
-  if (spy.weapon >= 1) {
-    spy.gunCd -= dt;
-    if (spy.gunCd <= 0) {
-      spy.gunCd = SPY.GUN_RATE;
-      const b = spawnBullet(player.x, -4);
-      spy.bullets.push(b);
-    }
-  }
-  if (spy.weapon >= 2) {
-    spy.bombCd -= dt;
-    if (spy.bombCd <= 0) {
-      spy.bombCd = SPY.BOMB_RATE;
-      const b = spawnBomb(player.x, -5);
-      spy.bombProjs.push(b);
-    }
-  }
+  // --- Disparar el arma equipada (solo con el botón de disparo) ---
+  spyFireGround(dt);
 
   // --- Update balas ---
   for (let i = spy.bullets.length - 1; i >= 0; i--) {
     const b = spy.bullets[i];
     b.z -= b.speed * dt;
+    if (b.homing) {
+      // misil: busca al enemigo más cercano por delante
+      let tgt = null, best = Infinity;
+      spy.enemies.forEach(e => { const d = b.z - e.z; if (d > 0 && d < best) { best = d; tgt = e; } });
+      if (tgt) b.x += clamp(tgt.x - b.x, -1, 1) * 30 * dt;
+      b.mesh.position.x = b.x;
+      if (Math.random() < 0.5) burst(b.x, 1, b.z + 0.8, 1, { colors: [[1, 0.17, 0.84], [1, 0.6, 0.9]], speed: 1, up: 0.5, life: 0.25, size: 0.3, spread: 0.1, grav: 0 });
+    }
     b.mesh.position.z = b.z;
     if (b.z < SPAWN_Z - 50) {
       scene.remove(b.mesh);
@@ -10766,23 +11750,8 @@ function spyUpdateGround(dt) {
     }
   }
 
-  // --- Colisión balas con tráfico inocente ---
-  traffic.forEach(v => {
-    if (v.knock) return;
-    // Balas que golpean tráfico inocente
-    for (let j = spy.bullets.length - 1; j >= 0; j--) {
-      const b = spy.bullets[j];
-      if (Math.abs(b.x - v.x) < 1.5 && Math.abs(b.z - v.z) < 2.5) {
-        scene.remove(b.mesh);
-        spy.bullets.splice(j, 1);
-        // Eliminar inocente = penalización
-        spyDamage(SPY.DMG_KILL);
-        knockVehicle(v, Math.sign(b.x - v.x));
-        flash('#ff9a3d');
-        toast('⚠️ CIVILIAN HIT', '-' + SPY.DMG_KILL + ' HP', '#ff3b5c');
-      }
-    }
-  });
+  // --- Balas atraviesan tráfico inocente (sin penalización) ---
+  // Las balas solo impactan enemigos y coches de pieza, no civiles.
 
   // --- Colisión jugador con tráfico inocente ---
   traffic.forEach(v => {
@@ -10805,8 +11774,11 @@ function spyUpdateGround(dt) {
    ============================================================ */
 
 function spyDamage(amount) {
+  if (spy.phase === 'dead' || spy.phase === 'win') return; // partida ya decidida
+  if (spy.iframes > 0) return; // invulnerable
   spy.hp -= amount;
   spy.lastDmg = 0;
+  spy.iframes = 1.2; // 1.2s de invulnerabilidad tras daño
   buzz([50, 30, 80]);
   if (spy.hp <= 0) {
     spy.hp = 0;
@@ -10818,69 +11790,496 @@ function spyDamage(amount) {
     player.vy = 5;
     AudioSys.sfx('crash');
     burst(player.x, 1, -1, 50, { colors: [[1, 0.3, 0.1], [1, 0.6, 0.2], [1, 1, 0.7]], speed: 16, up: 10, life: 1, size: 0.6, spread: 0.6, grav: 14 });
-    setTimeout(() => spyEnd(false), 1500);
+    spyLater(() => spyEnd(false), 1500);
   }
 }
 
 /* ============================================================
-   TRANSFORMACIÓN (suelo → aire)
+   TRANSFORMACIÓN ESTILO TRANSFORMERS (suelo → aire)
    ============================================================ */
 
-function spyUpdateTransform(dt) {
-  spy.transformT += dt;
-  const t = spy.transformT;
-  const dur = 3.5; // duración total de la transformación
+/* -- Piezas de transformación (se crean al iniciar la secuencia) -- */
+let _tfxParts = null;   // array de { mesh, startPos, startRot, startScale, endPos, endRot, endScale, phase }
+let _tfxFlash = null;   // mesh de flash blanco
+let _tfxTrail = null;   // estela de propulsión
 
-  if (t < dur) {
-    // Fase 1: coche acelera y se levanta
-    const lift = clamp(t / dur, 0, 1);
-    const h = lift * lift * SPY.AIR_Y;
-    // Mover la cámara gradualmente hacia arriba y atrás
-    camera.position.y = lerp(4.5, SPY.AIR_Y + 20, smooth(0, 1, lift));
-    camera.position.z = lerp(10.5, 5, smooth(0, 1, lift));
-    camera.lookAt(player.x, h, -10);
+function buildTransformParts() {
+  if (_tfxParts) { _tfxParts.forEach(p => scene.remove(p.mesh)); }
+  _tfxParts = [];
 
-    // Ocultar el coche del jugador gradualmente
-    if (t > dur * 0.4) {
-      // Mostrar el avión
-      spy.plane.root.visible = true;
-      spy.plane.root.position.set(player.x, h, -2);
-      spy.plane.root.rotation.set(0, 0, 0);
-      spy.plane.body.rotation.z = Math.sin(t * 2) * 0.1;
-    }
-  } else {
-    // Transformación completa → fase aérea
-    spy.phase = 'air';
-    spy.planeX = player.x;
-    spy.planeZ = -20;
-    spy.plane.root.visible = true;
-    spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
+  // Materiales de la transformación
+  const carMat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
+  const neonMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const hotMat  = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8,
+    blending: THREE.AdditiveBlending, depthWrite: false });
+  const sparkMat = basic({ color: 0xffd23f, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false });
 
-    // Limpiar tráfico y entidades de suelo
-    while (traffic.length) releaseVehicle(traffic.pop());
-    spy.enemies.forEach(e => scene.remove(e.model.root));
-    spy.enemies = [];
-    spy.pieceCars.forEach(p => scene.remove(p.model.root));
-    spy.pieceCars = [];
-    spy.bullets.forEach(b => scene.remove(b.mesh));
-    spy.bullets = [];
-    spy.bombProjs.forEach(b => scene.remove(b.mesh));
-    spy.bombProjs = [];
+  // === PARTE 1: Carrocería central — se alarga y aplana ===
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 3.2), carMat);
+  _tfxParts.push({
+    mesh: chassis,
+    startPos: [0, 0.5, 0], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0, 0],     endRot: [0, 0, 0],   endScale: [1.2, 0.3, 1.5],
+    phase: [0.0, 0.5], // t normalizado inicio-fin
+  });
 
-    // Preparar jefe
-    spy.boss.root.visible = true;
-    spy.boss.root.position.set(0, SPY.BOSS_Y, SPY.BOSS_Z);
+  // === PARTE 2: Techo — se separa hacia arriba y se convierte en cabina ===
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.4, 1.8), carMat);
+  _tfxParts.push({
+    mesh: roof,
+    startPos: [0, 1.2, -0.3], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.4, -1.0],   endRot: [-0.2, 0, 0], endScale: [0.6, 0.6, 0.8],
+    phase: [0.1, 0.55],
+  });
 
-    spy.phase = 'boss';
-    spy.bossPhase = 1;
-    spy.attackCd = 2;
-
-    toast('⚠️ MOTHERSHIP DETECTED', 'Destroy the turrets!', '#ff4444');
-
-    // Mostrar HUD del jefe
-    const bossHud = document.getElementById('spy-bosshud');
-    if (bossHud) bossHud.style.display = 'block';
+  // === PARTE 3 y 4: Puertas → se abren y giran hasta ser ALAS ===
+  for (let s = -1; s <= 1; s += 2) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 2.2), carMat);
+    _tfxParts.push({
+      mesh: door,
+      startPos: [s * 0.85, 0.7, 0],   startRot: [0, 0, 0], startScale: [1, 1, 1],
+      endPos: [s * 2.5, 0.1, 0.3],    endRot: [0, 0, s * -0.05], endScale: [0.6, 0.15, 1.3],
+      phase: [0.15, 0.6],
+    });
   }
+
+  // === PARTE 5 y 6: Ruedas delanteras → se retraen y giran hacia dentro ===
+  for (let s = -1; s <= 1; s += 2) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
+    _tfxParts.push({
+      mesh: wh,
+      startPos: [s * 0.78, 0.36, -1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
+      endPos: [s * 0.3, 0.1, -1.8],     endRot: [Math.PI / 2, 0, 0],   endScale: [0.5, 0.5, 0.5],
+      phase: [0.05, 0.4],
+    });
+  }
+
+  // === PARTE 7 y 8: Ruedas traseras → se retraen ===
+  for (let s = -1; s <= 1; s += 2) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
+    _tfxParts.push({
+      mesh: wh,
+      startPos: [s * 0.78, 0.36, 1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
+      endPos: [s * 0.4, 0.05, 1.0],    endRot: [Math.PI / 2, 0, 0],   endScale: [0.4, 0.4, 0.4],
+      phase: [0.05, 0.35],
+    });
+  }
+
+  // === PARTE 9: Capó → se alarga hasta ser morro del avión ===
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.5, 1.5), carMat);
+  _tfxParts.push({
+    mesh: hood,
+    startPos: [0, 0.7, -1.8], startRot: [-0.1, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.15, -2.5],  endRot: [-0.05, 0, 0],  endScale: [0.6, 0.35, 1.8],
+    phase: [0.2, 0.6],
+  });
+
+  // === PARTE 10: Maletero → se convierte en cola ===
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.0), carMat);
+  _tfxParts.push({
+    mesh: trunk,
+    startPos: [0, 0.8, 1.5], startRot: [0, 0, 0], startScale: [1, 1, 1],
+    endPos: [0, 0.3, 2.2],   endRot: [0, 0, 0],   endScale: [0.4, 0.8, 0.8],
+    phase: [0.2, 0.55],
+  });
+
+  // === PARTE 11 y 12: Alerones/estabilizadores verticales ===
+  for (let s = -1; s <= 1; s += 2) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.7), carMat);
+    _tfxParts.push({
+      mesh: fin,
+      startPos: [s * 0.5, 0.8, 1.5], startRot: [0, 0, s * 0.3], startScale: [0, 0, 0],
+      endPos: [s * 0.5, 0.6, 2.0],   endRot: [0, 0, s * 0.1],   endScale: [1, 1, 1],
+      phase: [0.4, 0.7],
+    });
+  }
+
+  // === Líneas neón que aparecen durante la transformación ===
+  for (let i = 0; i < 6; i++) {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, rand(1.5, 3.5)), neonMat);
+    _tfxParts.push({
+      mesh: line,
+      startPos: [rand(-1, 1), rand(0.2, 1.2), rand(-2, 2)], startRot: [0, rand(-0.5, 0.5), 0], startScale: [0, 0, 0],
+      endPos: [rand(-2.5, 2.5), rand(-0.1, 0.3), rand(-2, 2)], endRot: [0, 0, 0], endScale: [1, 1, 1],
+      phase: [0.3, 0.65],
+      fadeOut: true, // desaparecen al final
+    });
+  }
+
+  // Flash de energía
+  if (!_tfxFlash) {
+    _tfxFlash = new THREE.Mesh(
+      new THREE.SphereGeometry(6, 12, 8),
+      basic({ color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide })
+    );
+    scene.add(_tfxFlash);
+  }
+  _tfxFlash.visible = false;
+
+  // Añadir todas las piezas a la escena (ocultas)
+  _tfxParts.forEach(p => { p.mesh.visible = false; scene.add(p.mesh); });
+}
+
+function cleanupTransformParts() {
+  if (_tfxParts) {
+    _tfxParts.forEach(p => scene.remove(p.mesh));
+    _tfxParts = null;
+  }
+  if (_tfxFlash) _tfxFlash.visible = false;
+}
+
+/* Transformación cinemática (sin control): el coche se eleva envuelto en
+   energía, destello, aparece el avión y sube en vertical; fundido a blanco
+   y entramos en el cielo (entorno de nubes). Duración total: TF.END s. */
+const TF = { LIFT: 1.1, CHARGE: 2.5, POP: 2.75, CLIMB: 3.9, WHITE: 4.3, END: 5.4 };
+let _tfShell = null, _tfRing = null;
+function _tfBuild() {
+  if (_tfShell) return;
+  _tfShell = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14),
+    basic({ color: 0x9ff8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  _tfShell.scale.set(1.6, 1.0, 2.8);
+  _tfRing = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.08, 6, 40),
+    basic({ color: 0xff2bd6, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  _tfRing.rotation.x = Math.PI / 2;
+  scene.add(_tfShell); scene.add(_tfRing);
+}
+function _tfHide() { if (_tfShell) { _tfShell.visible = false; _tfRing.visible = false; } }
+
+function spyBeginTransform() {
+  spy.phase = 'transform';
+  spy.transformT = 0;
+  spy.tf = { x: player.x, carY: 0, swapped: false, entered: false, planeY: 0, planeZ: 0 };
+  spy.iframes = 99;
+  // fuera todo lo que pueda golpear o distraer durante la cinemática
+  while (traffic.length) releaseVehicle(traffic.pop());
+  spy.enemies.forEach(e => scene.remove(e.model.root)); spy.enemies = [];
+  spy.pieceCars.forEach(p => scene.remove(p.model.root)); spy.pieceCars = [];
+  spy.bullets.forEach(b => scene.remove(b.mesh)); spy.bullets = [];
+  spy.bombProjs.forEach(b => scene.remove(b.mesh)); spy.bombProjs = [];
+  spyClearPickups();
+  _tfBuild();
+  _tfShell.visible = true; _tfRing.visible = true;
+  if (playerModel) playerModel.root.visible = true;
+  toast('🛩️ TRANSFORMATION', 'Taking flight…', '#ff2bd6');
+  AudioSys.sfx('powerup');
+}
+
+function spyUpdateTransform(dt) {
+  if (!spy.tf) spyBeginTransform();
+  spy.transformT += dt;
+  const t = spy.transformT, T = spy.tf, px = T.x, m = playerModel;
+  const cam = spy.cam;
+
+  if (t < TF.POP) {
+    /* 1) el coche flota y se carga de energía */
+    const lift = smooth(0, TF.LIFT, t), charge = smooth(TF.LIFT, TF.CHARGE, t);
+    T.carY = lift * 0.7 + charge * charge * 3.3;
+    if (m) {
+      m.root.visible = true;
+      m.root.position.set(px, T.carY, 0);
+      m.root.rotation.y = 0;
+      m.body.rotation.x = -0.32 * charge;
+      m.body.rotation.z = Math.sin(t * 9) * 0.04 * lift;
+    }
+    _tfShell.position.set(px, T.carY + 0.7, 0);
+    _tfShell.material.opacity = 0.08 + 0.55 * charge + Math.sin(t * 30) * 0.05 * lift;
+    _tfShell.scale.set(1.6 - 0.3 * charge, 1.0, 2.8 - 0.5 * charge);
+    _tfRing.position.set(px, T.carY + 0.2, 0);
+    _tfRing.material.opacity = 0.8 * lift;
+    const rs = 1 + ((t * 1.6) % 1) * 0.8 - charge * 0.6;
+    _tfRing.scale.set(rs, rs, rs);
+    if (Math.random() < 0.5 + charge) {
+      burst(px + rand(-1.4, 1.4), T.carY + rand(0, 1.4), rand(-2, 2), 2, {
+        colors: [[0, 0.94, 1], [1, 0.17, 0.84], [1, 1, 1]], speed: 3, up: 4, life: 0.5, size: 0.25, spread: 0.3, grav: -2 });
+    }
+    // cámara: de cenital baja a un 3/4 lateral y sube con el coche
+    const k = smooth(0, 1.2, t);
+    cam.pos.set(px + lerp(0, 7.5, k), lerp(30, 2.6 + T.carY * 0.8, k), lerp(10, 6.5, k));
+    cam.look.set(px, T.carY + 0.8, lerp(-5, -0.5, k));
+    cam.fov = lerp(62, 50, k);
+    cam.snap = true;
+  } else {
+    /* 2) destello: el coche se convierte en el avión */
+    if (!T.swapped) {
+      T.swapped = true;
+      if (m) { m.root.visible = false; m.body.rotation.set(0, 0, 0); m.root.position.y = 0; }
+      spyWhite(0.85, 0.05);
+      burst(px, T.carY + 0.7, 0, 60, { colors: [[1, 1, 1], [0, 0.94, 1], [1, 0.17, 0.84]], speed: 18, up: 6, life: 0.7, size: 0.6, spread: 1, grav: 0 });
+      shake = 0.8;
+      AudioSys.sfx('nitro');
+      spy.plane.root.visible = true;
+    }
+    _tfShell.material.opacity *= Math.exp(-8 * dt);
+    _tfRing.material.opacity *= Math.exp(-8 * dt);
+    if (t > TF.POP + 0.4) _tfHide();
+    if (t > TF.POP + 0.15 && t < TF.WHITE) spyWhite(0, 0.35);
+
+    if (!T.entered) {
+      /* 3) el avión despega en vertical hacia el cielo */
+      const pop = smooth(TF.POP, TF.POP + 0.35, t), climb = smooth(TF.POP + 0.2, TF.WHITE, t);
+      const sc = Math.min(1.35, pop * 1.5);
+      T.planeY = T.carY + climb * climb * 34;
+      T.planeZ = -climb * 40;
+      spy.plane.root.scale.setScalar(Math.max(0.01, sc));
+      spy.plane.root.position.set(px, T.planeY, T.planeZ);
+      spy.plane.root.rotation.set(0, 0, 0);
+      spy.plane.body.rotation.set(0.55 * climb, 0, Math.sin(t * 4) * 0.12);
+      spyThrusters(1.4);
+      if (Math.random() < 0.9) burst(px + rand(-0.5, 0.5), T.planeY - 0.4, T.planeZ + 3, 3, {
+        colors: [[0, 0.94, 1], [0.6, 0.85, 1], [1, 1, 1]], speed: 3, up: -2, life: 0.5, size: 0.5, spread: 0.3, grav: 0 });
+      // la cámara se queda abajo y sigue al avión mirando hacia arriba
+      const ck = 1 - climb;
+      cam.pos.set(px + 1.5 + 5 * ck, T.planeY * 0.75 + 3 + 0.2 * ck, T.planeZ + 10 + 2 * ck);
+      cam.look.set(px, T.planeY + 0.5, T.planeZ - 2);
+      cam.fov = lerp(50, 60, climb);
+      cam.snap = true;
+      // 4) fundido a blanco
+      if (t > TF.CLIMB) spyWhite(smooth(TF.CLIMB, TF.WHITE, t), 1);
+      if (t >= TF.WHITE) {
+        T.entered = true;
+        spyWhite(1, 1);
+        spyAirEnv(true);
+        spy.planeX = clamp(px, -SPY.AIR_FIELD_W / 2, SPY.AIR_FIELD_W / 2);
+        spy.planeZ = -20;
+        spy.plane.root.scale.setScalar(1.35);
+      }
+    } else {
+      /* 5) se abre el blanco: el avión vuela sobre las nubes y la cámara
+            pasa de detrás del avión a la vista cenital */
+      const k = smooth(TF.WHITE, TF.END, t);
+      spyWhite(1 - smooth(TF.WHITE, TF.WHITE + 0.6, t), 1);
+      spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
+      spy.plane.body.rotation.set(lerp(0.25, 0, k), 0, Math.sin(t * 2.5) * 0.25 * (1 - k));
+      spyThrusters(1.2);
+      const air = spyAirCamTarget();
+      cam.pos.set(lerp(spy.planeX, air.pos.x, k), lerp(SPY.AIR_Y + 6, air.pos.y, k), lerp(spy.planeZ + 18, air.pos.z, k));
+      cam.look.set(lerp(spy.planeX, air.look.x, k), lerp(SPY.AIR_Y + 1, air.look.y, k), lerp(spy.planeZ - 20, air.look.z, k));
+      cam.fov = lerp(60, 62, k);
+      cam.snap = true;
+      if (t >= TF.END) {
+        _tfHide();
+        spyWhite(0, 1);
+        spy.tf = null;
+        spy.iframes = 1.5;
+        spy.phase = 'air';
+        spy.airWave = 0;
+        spy.airWaveDelay = 1.5;
+        spy.airEnemies = [];
+        toast('✈️ AIRSPACE ENTERED', 'Hold FIRE to launch missiles', '#ff8800');
+      }
+    }
+  }
+}
+
+/* --- Spawn de oleada de aviones enemigos --- */
+function spawnAirWave(waveNum) {
+  const count = SPY.AIR_ENEMY_PER_WAVE + Math.min(waveNum, 2); // +1 extra en oleadas tardías
+  for (let i = 0; i < count; i++) {
+    const model = buildEnemyPlane();
+    const startX = rand(-SPY.AIR_FIELD_W / 2, SPY.AIR_FIELD_W / 2);
+    const startZ = SPY.BOSS_Z - 20 - i * 8; // escalonados desde lejos
+    model.root.position.set(startX, SPY.AIR_Y + rand(-1, 2), startZ);
+    model.root.visible = true;
+
+    spy.airEnemies.push({
+      model,
+      hp: SPY.AIR_ENEMY_HP,
+      x: startX,
+      z: startZ,
+      y: SPY.AIR_Y + rand(-1, 2),
+      state: 'approach', // approach → strafe → dive → retreat → (loop or dead)
+      stateT: 0,
+      targetX: 0, // se actualiza al jugador
+      diveAngle: 0,
+      speed: SPY.AIR_ENEMY_SPEED + rand(-5, 5),
+    });
+  }
+  toast('⚠️ WAVE ' + (waveNum + 1), count + ' hostiles incoming', '#ff6600');
+}
+
+/* --- Transición al boss después de las oleadas --- */
+function transitionToBoss() {
+  spy.phase = 'boss';
+  spy.bossPhase = 1;
+  spy.attackCd = 2;
+  spy.bossT = 0;
+
+  spy.boss.root.visible = true;
+  spy.boss.root.position.set(0, SPY.BOSS_Y, SPY.BOSS_Z);
+
+  toast('⚠️ MOTHERSHIP DETECTED', 'Destroy the turrets!', '#ff4444');
+
+  const bossHud = document.getElementById('spy-bosshud');
+  if (bossHud) bossHud.style.display = 'block';
+}
+
+/* ============================================================
+   UPDATE: FASE AÉREA — OLEADAS DE ENEMIGOS
+   ============================================================ */
+
+function spyUpdateAirWaves(dt) {
+  if (!spy.plane) return;
+
+  // --- Movimiento del avión del jugador (igual que en boss) ---
+  const moveX = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  const moveZ = (input.brake ? -1 : 0) + (input.nitro ? 1 : 0);
+  spy.planeX += moveX * SPY.AIR_SPEED * dt;
+  spy.planeZ += moveZ * SPY.AIR_SPEED * 0.6 * dt;
+  spy.planeX = clamp(spy.planeX, -SPY.AIR_FIELD_W / 2, SPY.AIR_FIELD_W / 2);
+  spy.planeZ = clamp(spy.planeZ, -40, 10);
+
+  spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
+  spy.plane.body.rotation.z = -moveX * 0.3;
+  spy.plane.body.rotation.x = moveZ * 0.1;
+
+  // Propulsores parpadean
+  if (spy.plane.thrL) {
+    const sc = 0.8 + Math.sin(simTime * 15) * 0.2;
+    spy.plane.thrL.scale.set(sc, sc, sc);
+    spy.plane.thrR.scale.set(sc, sc, sc);
+  }
+
+
+  // --- Disparar misiles (solo con el botón de disparo) ---
+  spy.missileCd -= dt;
+  if (spy.fire && spy.missileCd <= 0) {
+    spy.missileCd = SPY.MISSILE_RATE;
+    // Apuntar al enemigo más cercano por delante (si no hay, recto)
+    let closest = null, closestDist = Infinity;
+    spy.airEnemies.forEach(e => {
+      const dz = spy.planeZ - e.z;
+      if (dz > 0 && dz < closestDist) { closestDist = dz; closest = e; }
+    });
+    const tx = closest ? closest.x : spy.planeX, tz = closest ? closest.z : spy.planeZ - 100;
+    spy.missiles.push(spawnMissile(spy.planeX - 1.5, spy.planeZ - 1, tx + rand(-1, 1), tz));
+    spy.missiles.push(spawnMissile(spy.planeX + 1.5, spy.planeZ - 1, tx + rand(-1, 1), tz));
+    AudioSys.sfx('nitro');
+  }
+
+  // --- Update misiles del jugador → impacto con aviones enemigos ---
+  for (let i = spy.missiles.length - 1; i >= 0; i--) {
+    const m = spy.missiles[i];
+    m.x += m.vx * dt;
+    m.z += m.vz * dt;
+    m.mesh.position.set(m.x, m.y, m.z);
+
+    let hit = false;
+    for (let j = spy.airEnemies.length - 1; j >= 0; j--) {
+      const ae = spy.airEnemies[j];
+      if (Math.abs(m.x - ae.x) < 2.5 && Math.abs(m.z - ae.z) < 2.5) {
+        ae.hp -= m.dmg;
+        hit = true;
+        burst(m.x, ae.y, m.z, 10, { colors: [[1, 0.5, 0.1], [0.8, 0.3, 0]], speed: 10, up: 5, life: 0.5, size: 0.4, spread: 0.5, grav: 6 });
+
+        if (ae.hp <= 0) {
+          // Destruir avión enemigo
+          burst(ae.x, ae.y, ae.z, 35, { colors: [[1, 0.6, 0.1], [1, 0.3, 0], [0.8, 0.2, 0]], speed: 16, up: 10, life: 1, size: 0.6, spread: 1, grav: 6 });
+          scene.remove(ae.model.root);
+          spy.airEnemies.splice(j, 1);
+          spy.score += SPY.AIR_ENEMY_SCORE;
+          shake = 0.6;
+          toast('💥 BANDIT DOWN', '+' + SPY.AIR_ENEMY_SCORE, '#ffd23f');
+        }
+        break;
+      }
+    }
+
+    if (hit || m.z < -80 || m.z > 20) {
+      scene.remove(m.mesh);
+      spy.missiles.splice(i, 1);
+    }
+  }
+
+  // --- Update enemigos aéreos (IA) ---
+  for (let i = spy.airEnemies.length - 1; i >= 0; i--) {
+    const ae = spy.airEnemies[i];
+    ae.stateT += dt;
+
+    if (ae.state === 'approach') {
+      // Volar hacia el jugador
+      ae.z += ae.speed * dt;
+      const dx = spy.planeX - ae.x;
+      ae.x += Math.sign(dx) * Math.min(Math.abs(dx), SPY.AIR_ENEMY_STRAFE * dt);
+      // Cuando llega a la Z del jugador → dive
+      if (ae.z > spy.planeZ - 5) {
+        ae.state = 'dive';
+        ae.stateT = 0;
+        ae.targetX = spy.planeX; // memorizar posición objetivo
+      }
+    } else if (ae.state === 'dive') {
+      // Picado rápido intentando colisionar con el jugador
+      ae.z += SPY.AIR_ENEMY_DIVE_SPEED * dt;
+      const dx = ae.targetX - ae.x;
+      ae.x += Math.sign(dx) * Math.min(Math.abs(dx), SPY.AIR_ENEMY_STRAFE * 1.5 * dt);
+      ae.y -= 8 * dt; // descender
+      ae.model.body.rotation.x = 0.3; // nose down
+
+      // Chispas de motor
+      if (Math.random() < 0.4) {
+        burst(ae.x + rand(-0.3, 0.3), ae.y, ae.z + 1, 1, { color: [1, 0.4, 0.1], speed: 3, up: 1, spread: 0.2, life: 0.3, size: 0.25, grav: 2 });
+      }
+
+      // Colisión con el jugador
+      if (Math.abs(ae.x - spy.planeX) < 2.5 && Math.abs(ae.z - spy.planeZ) < 3 && Math.abs(ae.y - SPY.AIR_Y) < 3) {
+        // Daño al jugador + destruir enemigo
+        spyDamage(SPY.DMG_ENEMY);
+        burst(ae.x, ae.y, ae.z, 25, { colors: [[1, 0.5, 0.1], [1, 0.2, 0]], speed: 14, up: 8, life: 0.8, size: 0.5, spread: 0.8, grav: 5 });
+        scene.remove(ae.model.root);
+        spy.airEnemies.splice(i, 1);
+        shake = 1;
+        continue;
+      }
+
+      // Si ya pasó de largo → retreat
+      if (ae.stateT > 2 || ae.z > spy.planeZ + 20) {
+        ae.state = 'retreat';
+        ae.stateT = 0;
+      }
+    } else if (ae.state === 'retreat') {
+      // Vuela hacia atrás y vuelve a approach
+      ae.z -= ae.speed * 1.2 * dt;
+      ae.y = lerp(ae.y, SPY.AIR_Y + rand(0, 2), dt * 2);
+      ae.model.body.rotation.x = lerp(ae.model.body.rotation.x, -0.15, dt * 3);
+
+      if (ae.z < spy.planeZ - 30) {
+        ae.state = 'approach';
+        ae.stateT = 0;
+        ae.model.body.rotation.x = 0;
+      }
+    }
+
+    // Actualizar posición y visual
+    ae.model.root.position.set(ae.x, ae.y, ae.z);
+
+    // Banking visual
+    const bankTarget = ae.state === 'dive' ? 0 : Math.sign(spy.planeX - ae.x) * 0.2;
+    ae.model.body.rotation.z = lerp(ae.model.body.rotation.z || 0, bankTarget, dt * 4);
+
+    // Exhaust parpadeante
+    if (ae.model.exL) {
+      const es = ae.state === 'dive' ? 1.5 : 0.8 + Math.sin(simTime * 12 + i * 3) * 0.3;
+      ae.model.exL.scale.set(es, es, es);
+      ae.model.exR.scale.set(es, es, es);
+    }
+  }
+
+  // --- Gestión de oleadas ---
+  spy.airWaveDelay -= dt;
+  if (spy.airEnemies.length === 0 && spy.airWaveDelay <= 0) {
+    if (spy.airWave < SPY.AIR_ENEMY_WAVES) {
+      spawnAirWave(spy.airWave);
+      spy.airWave++;
+      spy.airWaveDelay = 2; // pausa entre oleadas
+    } else {
+      // Todas las oleadas completadas → boss
+      transitionToBoss();
+      return;
+    }
+  }
+
+  spyUpdateHUD();
 }
 
 /* ============================================================
@@ -10912,13 +12311,10 @@ function spyUpdateAir(dt) {
     spy.plane.thrR.scale.set(sc, sc, sc);
   }
 
-  // --- Cámara aérea (cenital con perspectiva) ---
-  camera.position.set(spy.planeX * 0.3, SPY.AIR_Y + 30, spy.planeZ + 25);
-  camera.lookAt(spy.planeX * 0.5, SPY.AIR_Y, spy.planeZ - 10);
 
   // --- Disparar misiles ---
   spy.missileCd -= dt;
-  if (spy.missileCd <= 0) {
+  if (spy.fire && spy.missileCd <= 0 && !spy.bossDying) {
     spy.missileCd = SPY.MISSILE_RATE;
     // 2 misiles por salva, apuntando al jefe
     const bx = spy.boss.root.position.x, bz = spy.boss.root.position.z;
@@ -10933,6 +12329,9 @@ function spyUpdateAir(dt) {
     m.x += m.vx * dt;
     m.z += m.vz * dt;
     m.mesh.position.set(m.x, m.y, m.z);
+
+    // El jefe ya está muriendo: los misiles en vuelo se descartan (no vuelven a puntuar)
+    if (spy.bossDying) { scene.remove(m.mesh); spy.missiles.splice(i, 1); continue; }
 
     // Colisión con el jefe
     const bossPos = spy.boss.root.position;
@@ -11036,7 +12435,7 @@ function spyUpdateAir(dt) {
           // Muerte instantánea en aire (prototipo)
           spy.phase = 'dead';
           planeExplode();
-          setTimeout(() => spyEnd(false), 1500);
+          spyLater(() => spyEnd(false), 1500);
           return;
         }
       }
@@ -11058,6 +12457,7 @@ function spyUpdateAir(dt) {
       if (a.t >= a.warnDur && !a.fired) {
         a.fired = true;
         a.zones.forEach(z => {
+          if (spy.phase === 'dead') return; // ya murió en otra zona
           if (z.warn) { z.warn.material.opacity = 0.6; z.warn.material.color.set(0xff4400); }
           burst(z.x, SPY.AIR_Y, z.z, 15, { colors: [[1, 0.5, 0.1], [1, 0.3, 0]], speed: 10, up: 5, life: 0.6, size: 0.5, spread: 1, grav: 4 });
           // Comprobar si el jugador está en la zona
@@ -11065,7 +12465,7 @@ function spyUpdateAir(dt) {
           if (Math.sqrt(dx * dx + dz * dz) < z.r) {
             spy.phase = 'dead';
             planeExplode();
-            setTimeout(() => spyEnd(false), 1500);
+            spyLater(() => spyEnd(false), 1500);
             return;
           }
         });
@@ -11094,13 +12494,21 @@ function planeExplode() {
 }
 
 function bossExplode() {
-  if (!spy.boss) return;
+  if (!spy.boss || spy.bossDying) return; // una sola explosión por jefe
+  spy.bossDying = true;
+  // el jefe ya no ataca mientras explota (no puede matar al jugador que acaba de ganar)
+  spy.attacks.forEach(a => {
+    if (a.warn) scene.remove(a.warn);
+    if (a.zones) a.zones.forEach(z => { if (z.warn) scene.remove(z.warn); });
+  });
+  spy.attacks = [];
+  spy.attackCd = 999;
   const p = spy.boss.root.position;
 
   // Explosión en cadena
   let delay = 0;
   for (let i = 0; i < 8; i++) {
-    setTimeout(() => {
+    spyLater(() => {
       const ox = rand(-6, 6), oz = rand(-3, 3);
       burst(p.x + ox, SPY.BOSS_Y + rand(-2, 2), p.z + oz, 40,
         { colors: [[1, 0.6, 0.1], [1, 0.3, 0], [1, 0.9, 0.4]], speed: 18, up: 10, life: 1.5, size: 0.8, spread: 1, grav: 5 });
@@ -11110,7 +12518,7 @@ function bossExplode() {
     delay += 300;
   }
 
-  setTimeout(() => {
+  spyLater(() => {
     spy.boss.root.visible = false;
     // Gran explosión final
     burst(p.x, SPY.BOSS_Y, p.z, 100,
@@ -11130,47 +12538,382 @@ function spyUpdate(dt) {
 
   if (spy.phase === 'ground') {
     spyUpdateGround(dt);
+    if (spy.pendingTf && spy.phase === 'ground') { spy.pendingTf = false; spyBeginTransform(); }
   } else if (spy.phase === 'transform') {
     spyUpdateTransform(dt);
+  } else if (spy.phase === 'air') {
+    spyUpdateAirWaves(dt);
   } else if (spy.phase === 'boss') {
     spyUpdateAir(dt);
   }
 
   spyUpdateHUD();
+  spyPieceIndicator();
+  document.body.classList.toggle('spy-cine', spy.phase === 'transform');
+  document.body.classList.toggle('spy-air', spy.inAir);
 }
 
 /* ============================================================
-   FX (llamado en el render loop)
+   CÁMARA, ENTORNO AÉREO, DISPARO E INTEGRACIÓN
+   Todo lo de este modo se activa solo con spy.mode; el modo normal
+   y RACE no pasan por aquí (las envolturas devuelven el control
+   original en cuanto spy.mode es false).
    ============================================================ */
 
-function spyFx(t) {
-  // Nada por ahora — se usará para efectos visuales adicionales
+spy.cam = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 55, snap: false };
+spy.fire = false;
+spy.inAir = false;
+const _spCamPos = new THREE.Vector3(), _spCamLook = new THREE.Vector3();
+
+function spyAirCamTarget() {
+  const x = spy.planeX * 0.35;
+  if (spy.phase === 'boss' && spy.boss) {
+    // encuadre del combate: avión abajo, nave nodriza arriba
+    const bz = spy.boss.root.position.z;
+    return { pos: { x, y: SPY.AIR_Y + 34, z: spy.planeZ + 14 }, look: { x, y: SPY.AIR_Y + 2, z: lerp(spy.planeZ, bz, 0.55) } };
+  }
+  return { pos: { x, y: SPY.AIR_Y + 21, z: spy.planeZ + 8 }, look: { x, y: SPY.AIR_Y - 2, z: spy.planeZ - 6 } };
+}
+function spyThrusters(k) {
+  if (!spy.plane || !spy.plane.thrL) return;
+  const sc = k * (0.8 + Math.sin(simTime * 15) * 0.2);
+  spy.plane.thrL.scale.set(sc, sc, sc); spy.plane.thrR.scale.set(sc, sc, sc);
+}
+function spyClearPickups() {
+  coins.forEach(c => { c.alive = false; });
+  coins.length = 0;
+  powerups.forEach(p => scene.remove(p.mesh));
+  powerups.length = 0;
+  run.nextCoin = run.nextPU = 1e12;
 }
 
-/* ============================================================
-   ACCIÓN / INTEGRACIÓN
-   ============================================================ */
-
-function openSpyPre() {
-  show('spypre');
+/* --- fundido a blanco (DOM) --- */
+let _spWhiteEl = null;
+function spyWhite(v, rate) {
+  if (!_spWhiteEl) {
+    _spWhiteEl = document.createElement('div');
+    _spWhiteEl.id = 'spy-white';
+    document.body.appendChild(_spWhiteEl);
+  }
+  const cur = +(_spWhiteEl.dataset.v || 0);
+  const nv = rate >= 1 ? v : cur + (v - cur) * rate;
+  _spWhiteEl.dataset.v = nv;
+  _spWhiteEl.style.opacity = nv < 0.005 ? 0 : nv;
 }
+
+/* --- arma: cada pieza SUSTITUYE a la anterior (no se acumulan) --- */
+function spyEquip(pieceIndex) {
+  if (pieceIndex >= 3) return; // WINGS = transformación, no es un arma
+  const prev = spy.weapon;
+  spy.weapon = pieceIndex + 1;
+  spy.gunCd = spy.bombCd = 0;
+  const names = ['', 'MACHINE GUN', 'BOMBS', 'MISSILES'];
+  setTimeout(() => toast('🎯 ' + names[spy.weapon] + ' EQUIPPED', prev ? 'replaces ' + names[prev] + ' · hold FIRE' : 'hold FIRE to shoot', '#ffd23f'), 700);
+}
+
+function spyFireGround(dt) {
+  spy.gunCd -= dt;
+  if (!spy.fire || !spy.weapon || spy.gunCd > 0) return;
+  if (spy.weapon === 1) {
+    spy.gunCd = SPY.GUN_RATE;
+    spy.gunSide = -(spy.gunSide || 1);
+    spy.bullets.push(spawnBullet(player.x + spy.gunSide * 0.45, -3));
+    burst(player.x + spy.gunSide * 0.45, 1, -2.6, 3, { colors: [[1, 0.9, 0.4], [1, 0.6, 0.1]], speed: 3, up: 1, life: 0.1, size: 0.9, spread: 0.2, grav: 0, world: false });
+  } else if (spy.weapon === 2) {
+    spy.gunCd = 0.55;
+    spy.bombProjs.push(spawnBomb(player.x, -4));
+  } else if (spy.weapon === 3) {
+    spy.gunCd = 0.5;
+    const mesh = new THREE.Mesh(_missileGeo, _missileMat);
+    mesh.position.set(player.x, 1, -3);
+    scene.add(mesh);
+    spy.bullets.push({ mesh, x: player.x, z: -3, speed: 110, dmg: 3, homing: true });
+    AudioSys.sfx('nitro');
+  }
+}
+
+/* --- entorno aéreo: mar de nubes visto desde arriba --- */
+let _spAir = null;
+const _spHidden = [];
+function _spCloudTex(size, blobs, base, soft) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d');
+  if (base) { g.fillStyle = base; g.fillRect(0, 0, size, size); }
+  for (let i = 0; i < blobs; i++) {
+    const x = Math.random() * size, y = Math.random() * size, r = size * rand(0.04, soft ? 0.16 : 0.11);
+    const a = rand(0.25, 0.7);
+    for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) {
+      const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+      gr.addColorStop(0, `rgba(255,255,255,${a})`); gr.addColorStop(0.55, `rgba(240,248,255,${a * 0.6})`); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x + ox, y + oy, r, 0, Math.PI * 2); g.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function _spPuffTex() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  for (let i = 0; i < 14; i++) {
+    const x = 128 + rand(-60, 60), y = 128 + rand(-40, 40), r = rand(40, 80);
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+function _spBuildAir() {
+  const grp = new THREE.Group();
+  grp.userData.spyAir = true;
+  const FLOOR_Y = SPY.AIR_Y - 26;
+  // capa base: mar de nubes opaco (tapa por completo el mundo de abajo)
+  const t1 = _spCloudTex(512, 70, '#5f97cf', true); t1.repeat.set(4, 4);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(900, 900),
+    basic({ map: t1, color: 0xc9d6e4, fog: false }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(0, FLOOR_Y, -150);
+  grp.add(floor);
+  // segunda capa translúcida, más rápida → paralaje
+  const t2 = _spCloudTex(512, 90, null, false); t2.repeat.set(3, 3);
+  const mid = new THREE.Mesh(new THREE.PlaneGeometry(900, 900),
+    basic({ map: t2, color: 0xd5dfe9, transparent: true, opacity: 0.7, depthWrite: false, fog: false }));
+  mid.rotation.x = -Math.PI / 2; mid.position.set(0, FLOOR_Y + 7, -150);
+  grp.add(mid);
+  // nubes sueltas a distintas alturas (algunas por encima del avión)
+  const pt = _spPuffTex(), puffs = [];
+  for (let i = 0; i < 34; i++) {
+    const high = i < 8;
+    const mat = basic({ map: pt, color: 0xdfe6ee, transparent: true, opacity: high ? 0.3 : 0.85, depthWrite: false, fog: false });
+    const q = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    q.rotation.x = -Math.PI / 2; q.rotation.z = rand(0, Math.PI * 2);
+    const s = high ? rand(18, 34) : rand(22, 60);
+    q.scale.set(s, s * rand(0.6, 1), 1);
+    q.userData = { y: high ? SPY.AIR_Y + rand(8, 22) : FLOOR_Y + rand(10, 20), v: high ? rand(1.4, 1.8) : rand(0.5, 0.9) };
+    q.position.set(rand(-120, 120), q.userData.y, rand(-320, 40));
+    q.renderOrder = high ? 8 : 1;
+    grp.add(q); puffs.push(q);
+  }
+  // luz propia para que el avión se vea siempre de día
+  const skyL = new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25);
+  grp.add(skyL);
+  return { grp, t1, t2, puffs };
+}
+function _spKeep(o) {
+  return o === _spAir.grp || o.isLight || o === sky || o.isPoints ||
+    (spy.plane && o === spy.plane.root) || (spy.boss && o === spy.boss.root) ||
+    o.userData.spyKeep || _spSpyOwned(o);
+}
+function _spSpyOwned(o) {
+  if (spy.airEnemies.some(e => e.model && e.model.root === o)) return true;
+  if (spy.missiles.some(m => m.mesh === o)) return true;
+  if (spy.attacks.some(a => a.warn === o || (a.zones && a.zones.some(z => z.warn === o)))) return true;
+  return false;
+}
+function spyAirEnv(on) {
+  if (on) {
+    if (!_spAir) _spAir = _spBuildAir();
+    if (!_spAir.grp.parent) scene.add(_spAir.grp);
+    spy.inAir = true;
+    if (spy.plane && spy.plane.halo) spy.plane.halo.visible = false;
+    spyAirHide();
+  } else {
+    spy.inAir = false;
+    if (_spAir && _spAir.grp.parent) scene.remove(_spAir.grp);
+    _spHidden.forEach(o => { o.visible = true; });
+    _spHidden.length = 0;
+  }
+}
+function spyAirHide() {
+  // oculta el mundo de la carretera (lo que aparezca nuevo, también)
+  for (const o of scene.children) {
+    if (o.visible && !_spKeep(o)) { o.visible = false; _spHidden.push(o); }
+  }
+}
+function spyAirTick(dt) {
+  if (!_spAir) return;
+  spyAirHide();
+  const v = 55 * dt;
+  _spAir.t1.offset.y += v / 180;
+  _spAir.t2.offset.y += v / 110;
+  _spAir.puffs.forEach(q => {
+    q.position.z += v * q.userData.v;
+    if (q.position.z > 60) { q.position.z = rand(-340, -280); q.position.x = rand(-120, 120); }
+  });
+  scene.fog.color.setHex(0xbfdcf5); scene.fog.near = 200; scene.fog.far = 700;
+  if (spy.boss && spy.boss.engines && spy.boss.root.visible) spy.boss.engines.forEach((f, i) => { const k = 0.85 + 0.25 * Math.sin(simTime * 22 + i * 1.7); f.scale.set(1, k, 1); });
+}
+
+/* --- cámara: cenital en suelo, cinemática en la transformación,
+       cenital sobre las nubes en el aire --- */
+function spyCamera(dt) {
+  const c = spy.cam;
+  if (spy.phase === 'transform') {
+    _spCamPos.copy(c.pos); _spCamLook.copy(c.look);
+  } else if (spy.inAir) {
+    const a = spyAirCamTarget();
+    _spCamPos.set(a.pos.x, a.pos.y, a.pos.z); _spCamLook.set(a.look.x, a.look.y, a.look.z);
+    c.fov = 62;
+  } else {
+    const x = player.x * 0.5;
+    _spCamPos.set(x, 30, 10); _spCamLook.set(x, 0, -5);
+    c.fov = 62;
+  }
+  if (c.snap || state === 'countdown' || !spy.camInit) {
+    c.pos.copy(_spCamPos); c.look.copy(_spCamLook); spy.camInit = true; c.snap = false;
+  } else {
+    const k = 1 - Math.exp(-6 * dt);
+    c.pos.lerp(_spCamPos, k); c.look.lerp(_spCamLook, k);
+  }
+  camera.position.copy(c.pos);
+  if (shake > 0 && !save.settings.reducedMotion) {
+    camera.position.x += rand(-1, 1) * shake * 0.35; camera.position.z += rand(-1, 1) * shake * 0.25;
+  }
+  camera.lookAt(c.look);
+  camera.fov = c.fov;
+  camera.updateProjectionMatrix();
+  sky.position.copy(camera.position);
+  pointScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+}
+
+/* lado por el que se coloca un enemigo: donde haya hueco junto al jugador */
+function spyPickSide() {
+  if (player.x > 3.5) return -1;
+  if (player.x < -3.5) return 1;
+  const taken = spy.enemies.filter(e => e.state !== 'retreat').map(e => e.side);
+  if (taken.includes(1)) return -1;
+  if (taken.includes(-1)) return 1;
+  return Math.random() < 0.5 ? -1 : 1;
+}
+
+/* indicador en pantalla del coche de pieza (dónde está y a qué distancia) */
+let _spInd = null;
+function spyPieceIndicator() {
+  if (!_spInd) {
+    _spInd = document.createElement('div'); _spInd.id = 'spy-ind';
+    document.getElementById('hud').appendChild(_spInd);
+  }
+  const p = spy.phase === 'ground' ? spy.pieceCars[0] : null;
+  if (!p || (p.z > -32 && p.z < 12)) { _spInd.style.display = 'none'; return; }
+  const col = '#' + SPY.PIECE_COLORS[p.pieceIndex].toString(16).padStart(6, '0');
+  const ahead = p.z < 0;
+  _spInd.style.display = 'flex';
+  _spInd.style.top = ahead ? '92px' : 'auto';
+  _spInd.style.bottom = ahead ? 'auto' : '150px';
+  _spInd.style.left = clamp(50 + (p.x - player.x) * 3, 20, 80) + '%';
+  _spInd.style.borderColor = col; _spInd.style.color = col;
+  _spInd.textContent = (ahead ? '▲ ' : '▼ ') + ['🔫', '💣', '🚀', '✈️'][p.pieceIndex] + ' ' + SPY.PIECE_NAMES[p.pieceIndex] + ' · ' + Math.round(Math.abs(p.z)) + ' m';
+}
+
+/* ---------- envolturas (no-op fuera del modo Spy) ---------- */
+// sin túneles en Spy: desde la cámara cenital no se ve nada dentro
+const _spExtendZones = extendZones;
+extendZones = function () {
+  const n0 = Zones.list.length;
+  _spExtendZones();
+  if (spy.mode) for (let i = n0; i < Zones.list.length; i++) spyNoTunnel(Zones.list[i]);
+};
+function spyNoTunnel(Z) {
+  if (Z.type !== 'tunnel' || Z.objs) return;
+  Z.type = 'bridge';
+  Z.len = lerp(ZONE_LEN.bridge[0], ZONE_LEN.bridge[1], Math.random());
+  Z.end = Z.start + Z.len;
+}
+const _spUpdateCamera = updateCamera;
+updateCamera = function (dt) {
+  _spUpdateCamera(dt);
+  if (!spy.mode || spy.phase === 'off') return;
+  if (state !== 'playing' && state !== 'countdown' && state !== 'crashing' && state !== 'gameover' && state !== 'paused') return;
+  if (spy.inAir) spyAirTick(dt);
+  spyCamera(dt);
+};
+
+const _spUpdatePlayer = updatePlayer;
+updatePlayer = function (dt) {
+  if (spy.mode && (spy.phase === 'transform' || spy.inAir)) {
+    // cinemática y vuelo: el coche no se controla
+    player.vx = 0; player.steer = 0; player.nitroOn = false; player.brake = false;
+    player.speed = Math.max(player.speed, 30);
+    if (spy.inAir) { cycle = 0.3; Weather.target = 0; }
+    return;
+  }
+  _spUpdatePlayer(dt);
+};
+
+const _spUpdatePlayerVisual = updatePlayerVisual;
+updatePlayerVisual = function (dt, ws) {
+  // durante la cinemática y en el aire, el coche lo mueve este módulo (o está oculto)
+  if (spy.mode && (spy.phase === 'transform' || spy.inAir) && state === 'playing') return;
+  _spUpdatePlayerVisual(dt, ws);
+};
+
+const _spCrash = crash;
+crash = function (v, dir) {
+  // en Spy el daño va por la barra de energía; nunca un choque instantáneo
+  if (spy.mode && spy.phase !== 'off') { if (spy.phase === 'ground' && v && v.model) knockVehicle(v, dir); return; }
+  _spCrash(v, dir);
+};
+
+const _spSpawnPattern = spawnPattern;
+spawnPattern = function () { if (spy.mode && spy.phase !== 'ground') return; _spSpawnPattern(); };
+
+function spyCleanup() {
+  spy.mode = false;
+  spyReset();
+  spyShowHUD(false);
+  document.body.classList.remove('spy-mode', 'spy-cine', 'spy-air');
+  if (_spInd) _spInd.style.display = 'none';
+  if (playerModel) { playerModel.root.visible = true; playerModel.body.rotation.set(0, 0, 0); }
+}
+
+/* ---------- disparo: botón propio + teclas F / J / K ---------- */
+const SPY_FIRE_KEYS = { KeyF: 1, KeyJ: 1, KeyK: 1, ControlLeft: 1, ControlRight: 1 };
+addEventListener('keydown', e => { if (SPY_FIRE_KEYS[e.code] && spy.mode) { spy.fire = true; if (state === 'playing') e.preventDefault(); } });
+addEventListener('keyup', e => { if (SPY_FIRE_KEYS[e.code]) spy.fire = false; });
+addEventListener('blur', () => { spy.fire = false; });
+(function addFireButton() {
+  const grp = document.querySelector('#touch .tgroup:last-child');
+  if (!grp) return;
+  const b = document.createElement('button');
+  b.className = 'tbtn spy-fire'; b.textContent = 'FIRE'; b.setAttribute('aria-label', 'Fire');
+  grp.insertBefore(b, grp.firstChild);
+  const on = e => { e.preventDefault(); spy.fire = true; b.classList.add('on'); if (b.setPointerCapture) try { b.setPointerCapture(e.pointerId); } catch (er) {} };
+  const off = e => { e.preventDefault(); spy.fire = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on);
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, off));
+  b.addEventListener('contextmenu', e => e.preventDefault());
+})();
+
+/* ---------- FX ---------- */
+function spyFx(t) {}
+
+/* ---------- acciones ---------- */
+function openSpyPre() { show('spypre'); }
 
 Object.assign(actions, {
   spy: openSpyPre,
-  'spy-start'() { spy.mode = true; spyStart(); startRun(); },
-  'spy-back'() { spy.mode = false; show('menu'); },
+  'spy-start'() { race.mode = false; spy.mode = true; startRun(); },
+  'spy-back'() { spyCleanup(); show('menu'); },
 });
-
-// Wrap play para desactivar spy.mode cuando se juega normal
 const _spPlay = actions.play;
-actions.play = function () { spy.mode = false; spyReset(); _spPlay(); };
+actions.play = function () { spyCleanup(); _spPlay(); };
+const _spRaceStart = actions['race-start'], _spRaceRetry = actions['race-retry'];
+actions['race-start'] = function () { spyCleanup(); _spRaceStart(); };
+actions['race-retry'] = function () { spyCleanup(); _spRaceRetry(); };
+const _spMenu = goMenu;
+goMenu = function () { spyCleanup(); _spMenu(); };
 
-// Wrap startRun para preparar SPY mode si está activo
 const _origStartRun = startRun;
 startRun = function () {
+  if (!spy.mode) spyCleanup();
   _origStartRun();
   if (spy.mode) {
     spyStart();
+    // sin policía, helicóptero, bifurcaciones ni controles: solo lo del modo Spy
+    run.nextCop = run.nextHeli = run.nextFork = run.nextRB = 1e12;
+    ghostPlay = null;
+    Zones.list.forEach(spyNoTunnel);
+    document.body.classList.add('spy-mode');
   }
 };
 
@@ -11199,11 +12942,22 @@ const SPY_CSS = `
 .spy-pieces .sp { font-size:16px; opacity:0.3; filter:grayscale(1); transition:all 0.3s; }
 .spy-pieces .sp.got { opacity:1; filter:grayscale(0); transform:scale(1.2); }
 .spy-weapon { font-size:11px; color:#ffd23f; text-shadow:0 0 6px rgba(255,210,63,0.5); letter-spacing:0.5px; }
-.spy-boss { position:absolute; top:12px; left:50%; transform:translateX(-50%); text-align:center; display:none; }
+.spy-boss { position:absolute; top:84px; left:50%; transform:translateX(-50%); text-align:center; display:none; pointer-events:none; z-index:10; }
 .sb-name { font-size:11px; color:#ff4444; letter-spacing:2px; text-shadow:0 0 8px rgba(255,68,68,0.5); margin-bottom:4px; }
 .sb-bar { width:200px; height:8px; background:rgba(0,0,0,0.6); border-radius:4px; overflow:hidden; border:1px solid rgba(255,68,68,0.3); }
 .sb-bar i { display:block; height:100%; width:100%; background:linear-gradient(90deg,#ff4444,#ff8833); transition:width 0.2s; border-radius:4px; }
 .sb-phase { font-size:9px; color:rgba(255,255,255,0.6); margin-top:3px; letter-spacing:1px; }
+#spy-white { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:40; }
+.tbtn.spy-fire { display:none; font-size:12px; letter-spacing:.06em; border-color:#ff3b5c; color:#ff3b5c; }
+body.spy-mode .tbtn.spy-fire { display:inline-flex; align-items:center; justify-content:center; }
+body.spy-mode .tbtn.spy-fire.on { background:rgba(255,59,92,.35); box-shadow:0 0 18px #ff3b5c; }
+.spy-key { font-size:9px; color:rgba(255,255,255,.6); letter-spacing:1px; margin-top:3px; }
+body.spy-mode #heat, body.spy-mode .run-goal { display:none !important; }
+body.spy-cine #hud, body.spy-cine #touch { opacity:0; pointer-events:none; transition:opacity .3s; }
+body.spy-air #hud .speedo, body.spy-air #drive-coach, body.spy-air .combo { display:none !important; }
+@media (pointer:coarse) { .spy-key { display:none; } }
+#spy-ind { position:absolute; transform:translateX(-50%); display:none; align-items:center; gap:6px; padding:6px 12px; border:2px solid; border-radius:14px; background:rgba(8,10,30,.8); font-weight:800; font-size:13px; letter-spacing:.05em; z-index:12; pointer-events:none; animation:spyIndPulse .8s ease-in-out infinite alternate; white-space:nowrap; }
+@keyframes spyIndPulse { from { box-shadow:0 0 6px currentColor; } to { box-shadow:0 0 22px currentColor; } }
 `;
 
 // Inyectar CSS dinámicamente
@@ -11212,6 +12966,9 @@ const SPY_CSS = `
   style.textContent = SPY_CSS;
   document.head.appendChild(style);
 })();
+
+window.NSSpy = { spy, actions, camera, race, run: () => run, get state() { return state; }, get playerModel() { return playerModel; },
+  beginTransform: spyBeginTransform, equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
@@ -11736,7 +13493,7 @@ Object.assign(actions, {
 });
 setTimeout(() => pushIntro(false), 3500);
 
-window.NS_BUILD = '15adb1fa';
+window.NS_BUILD = '8e3d9b41';
 /* =====================================================================
    PULIDO GRÁFICO (solo build r187)
    - Reflejos: coches, cristales y asfalto mojado reflejan el cielo pintado real (con su ciudad,
