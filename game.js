@@ -7477,6 +7477,7 @@ function update(realDt) {
   if (state === 'paused') dt = 0;
   if (state === 'crashing') { crashT += realDt; dt = realDt * (crashT < 0.7 ? 0.3 : 1); }
   if (slowmo > 0 && state !== 'paused') { slowmo -= realDt; if (state === 'playing') dt *= 0.35; }
+  if (window.__nsTimeScale != null) dt *= window.__nsTimeScale;   // solo para pruebas: ver animaciones a cámara lenta
   simTime += dt;
   skyMat.uniforms.time.value = simTime;
   glow.begin(); smoke.begin();
@@ -11675,10 +11676,10 @@ function spyUpdateGround(dt) {
     spy.iframes -= dt;
     // Parpadeo visual del coche cuando invulnerable
     if (playerModel && playerModel.root) {
-      playerModel.root.visible = Math.sin(spy.iframes * 20) > 0;
+      playerModel.root.visible = spy.noBlink ? true : Math.sin(spy.iframes * 20) > 0;
     }
   } else if (playerModel && playerModel.root) {
-    playerModel.root.visible = true;
+    playerModel.root.visible = true; spy.noBlink = false;
   }
 
   // --- Regeneración ---
@@ -12042,6 +12043,8 @@ function gReset() {
   if (G.darkEl) G.darkEl.style.opacity = 0;
   if (G.savedCycle != null) { cycle = G.savedCycle; G.savedCycle = null; }
   if (G.root && G.root.parent) G.root.parent.remove(G.root);
+  if (playerModel) playerModel.root.scale.setScalar(1);
+  spy.noBlink = false;
   gHudShow(false);
 }
 function gStart(daily) {
@@ -13042,6 +13045,12 @@ function gSpawnVan(i, x, z) {
 function gVanTick(p, dt) {
   const ps = player.speed;
   if (G.dock && G.dock.p === p) return;
+  if (p.leaving) {
+    p.leaveV += 40 * dt; p.z -= p.leaveV * dt;
+    p.open = Math.max(0, p.open - dt * 3); p.ramp.rotation.x = -Math.PI / 2 + p.open * (Math.PI / 2 - 0.22);
+    if (p.z < -110) { scene.remove(p.model.root); spy.pieceCars.splice(spy.pieceCars.indexOf(p), 1); }
+    return;
+  }
   const C = G.chase && G.chase.p === p ? G.chase : null;
   const aligned = p.z < 0 && Math.abs(player.x - p.x) < 1.8;
   if (C) {
@@ -13072,43 +13081,72 @@ function gVanTick(p, dt) {
     gBanner('LINE UP BEHIND IT', 'enter through the rear ramp', '#3dff8a', 1.2);
   }
 }
+/* Entrada en la furgoneta (1,5 s):
+   0,00–0,50  el coche sube por la rampa y entra (se encoge un poco para caber)
+   0,50       se cierra la puerta: "clac", destello y arma instalada
+   0,50–1,00  la furgoneta lleva el coche dentro
+   1,00–1,50  se abre la puerta, la furgoneta acelera y el coche baja por detrás
+   después    la furgoneta se aleja hasta salir de la pantalla (no desaparece de golpe) */
+const G_DOCK = { VZ: -6.0, IN: 0.5, HOLD: 1.0, END: 1.5, SCALE: 0.8, FLOOR: 0.55 };
 function gDockStart(p) {
-  G.dock = { p, t: 0, x0: player.x, z0: p.z, clac: false };
-  spy.iframes = Math.max(spy.iframes, 2.2);
+  G.dock = { p, t: 0, z0: p.z, clac: false, vis: { dz: 0, y: 0, sc: 1, hidden: false, pitch: 0 } };
+  spy.iframes = Math.max(spy.iframes, 2.4); spy.noBlink = true;
+  p.guide.visible = false;
   if (AudioSys.ready) AudioSys.tone(300, 0.4, { type: 'sine', vol: 0.05, to: 700 });
   if (G.chase && G.chase.p === p) gChaseEnd(true);
 }
 function gDockTick(dt) {
   const D = G.dock; if (!D) return;
-  const p = D.p, m = playerModel;
+  const p = D.p, V = D.vis, K = G_DOCK;
   D.t += dt;
-  const t = D.t;
-  if (t < 0.35) slowmo = Math.max(slowmo, 0.15);
-  // la furgoneta "se traga" el coche: retrocede sobre él
-  const k1 = clamp(t / 0.55, 0, 1);
-  p.z = lerp(D.z0, -0.2, k1 * k1 * (3 - 2 * k1));
-  p.x += (player.x - p.x) * 0; player.x += (p.x - player.x) * (1 - Math.exp(-dt * 10));
-  p.open = 1; p.ramp.rotation.x = -0.22;
-  if (m) m.root.visible = t < 0.42 || t > 1.05;
-  if (t > 0.5 && !D.clac) {
+  const t = D.t, io = k => k * k * (3 - 2 * k);
+  if (t < 0.3) slowmo = Math.max(slowmo, 0.12);
+  player.x += (p.x - player.x) * (1 - Math.exp(-dt * 12));
+  const inside = K.VZ - 0.3;                       // posición del coche dentro de la caja (relativa al jugador)
+  if (t < K.IN) {
+    // la furgoneta se coloca justo delante con la rampa bajada y el coche sube
+    const k = io(clamp(t / K.IN, 0, 1));
+    p.z = lerp(D.z0, K.VZ, io(clamp(t / 0.25, 0, 1)));
+    p.open = 1;
+    V.dz = inside * k; V.y = K.FLOOR * io(clamp((k - 0.25) / 0.5, 0, 1)); V.sc = lerp(1, K.SCALE, k);
+    V.pitch = 0.16 * Math.sin(Math.PI * clamp((k - 0.2) / 0.6, 0, 1)); V.hidden = false;
+  } else if (t < K.HOLD) {
+    p.z = K.VZ;
+    p.open = Math.max(0, p.open - dt * 6);         // se cierra la puerta
+    V.dz = inside; V.y = K.FLOOR; V.sc = K.SCALE; V.pitch = 0; V.hidden = p.open < 0.35;
+    p.model.body.position.y = Math.sin(t * 60) * 0.03;      // vibra mientras instala el arma
+    if (Math.random() < 0.6) burst(p.x + rand(-1, 1), 2.3, p.z + rand(-1.5, 1), 1, { colors: [[0.5, 0.95, 1], [1, 1, 1]], speed: 4, up: 3, life: 0.3, size: 0.3, spread: 0.2, grav: 8 });
+  } else {
+    // sale por detrás: la furgoneta acelera y el coche recupera su sitio
+    const k = io(clamp((t - K.HOLD) / (K.END - K.HOLD), 0, 1));
+    p.open = Math.min(1, p.open + dt * 8);
+    p.model.body.position.y = 0;
+    p.z = K.VZ - 60 * Math.pow(Math.max(0, t - K.HOLD - 0.12), 2);
+    V.hidden = false; V.sc = lerp(K.SCALE, 1, k); V.y = K.FLOOR * (1 - io(clamp(k / 0.6, 0, 1)));
+    V.dz = Math.min(0, lerp(inside, 0, k) + (p.z - K.VZ) * (1 - k));   // al principio aún va con la furgoneta
+    V.pitch = -0.14 * Math.sin(Math.PI * clamp(k / 0.7, 0, 1));
+  }
+  p.ramp.rotation.x = -Math.PI / 2 + p.open * (Math.PI / 2 - 0.22);
+  if (t >= K.IN && !D.clac) {
     D.clac = true;
     const i = p.pieceIndex;
     spy.pieces = Math.max(spy.pieces, i + 1); spy.nextPiece = Math.max(spy.nextPiece, i + 1);
     spy.hp = Math.min(SPY.HP_MAX, spy.hp + SPY.HEAL_PIECE + 10);
     if (i < 3) gEquip(i + 1);
-    gfxBoom(p.x, -0.5, 1.6, 0x7df9ff);
-    flash('#7df9ff'); shake = Math.max(shake, 0.5);
+    flash('#7df9ff'); shake = Math.max(shake, 0.4);
     AudioSys.sfx('powerup'); if (AudioSys.ready) AudioSys.tone(80, 0.2, { type: 'square', vol: 0.12, to: 40 });
-    gKill(300, p.x, -2, 'DOCKED');
+    gKill(300, p.x, p.z, 'DOCKED');
+    // la furgoneta ya está vacía: fuera insignia, baliza y halos
+    const m = p.model;
+    [m.mk && m.mk.g, m.beacon, m.ring, m.ring2, m.pulse, m.halo].forEach(o => { if (o) o.visible = false; });
     if (G.tut) G.tut.done.dock = true;
   }
-  // la furgoneta se aleja y te deja salir por delante
-  if (t > 0.95) { p.z -= (t - 0.95) * 140 * dt * 10; p.open = Math.max(0, p.open - dt * 3); }
   p.model.root.position.set(p.x, 0, p.z);
-  if (t > 1.6) {
-    scene.remove(p.model.root);
-    spy.pieceCars.splice(spy.pieceCars.indexOf(p), 1);
+  if (t >= K.END) {
     G.dock = null;
+    spy.iframes = 0.6;
+    if (playerModel) { playerModel.root.scale.setScalar(1); playerModel.root.visible = true; }
+    p.leaving = true; p.leaveV = 60 * 2 * (K.END - K.HOLD - 0.12);    // sigue alejándose a la velocidad que llevaba
     if (p.pieceIndex >= 3) { spy.pendingTf = true; gSectionEnd(G.sec, true); }
     else G.calm = 5;                      // respiro tras cada pieza
   }
@@ -13641,6 +13679,12 @@ function gPlayerAfter(dt) {
 function gPlayerVisualAfter() {
   const m = playerModel; if (!m || !G.root || spy.phase !== 'ground') return;
   if (G.recoil > 0) { m.root.position.z += G.recoil * 0.12; m.body.rotation.x += G.recoil * 0.02; }
+  if (G.dock) {
+    const V = G.dock.vis;
+    m.root.position.x = G.dock.p.x; m.root.position.z += V.dz; m.root.position.y += V.y;
+    m.root.rotation.set(0, 0, 0); m.body.rotation.set(V.pitch, 0, 0);
+    m.root.scale.setScalar(V.sc); m.root.visible = !V.hidden;
+  } else if (m.root.scale.x !== 1) m.root.scale.setScalar(1);
   const onBoat = G.boat && (G.boat.state === 'ride' || G.boat.state === 'jumpOut');
   if (G.jump) { const y = G.jump.y; if (onBoat && G.pBoat) { G.pBoat.root.position.y = y; G.pBoat.root.rotation.x = -0.25 * Math.cos(Math.PI * G.jump.t / G.jump.dur); } else { m.root.position.y = y; m.body.rotation.x = -0.2 * Math.cos(Math.PI * G.jump.t / G.jump.dur); } }
   if (onBoat) m.root.visible = false;
@@ -15896,7 +15940,7 @@ function spyPieceIndicator() {
     _spInd = document.createElement('div'); _spInd.id = 'spy-ind';
     document.getElementById('hud').appendChild(_spInd);
   }
-  const p = spy.phase === 'ground' ? spy.pieceCars[0] : null;
+  const p = spy.phase === 'ground' ? spy.pieceCars.find(q => !q.leaving) : null;
   if (!p || (p.z > -32 && p.z < 12)) { _spInd.style.display = 'none'; return; }
   const col = '#' + SPY.PIECE_COLORS[p.pieceIndex].toString(16).padStart(6, '0');
   const ahead = p.z < 0;
