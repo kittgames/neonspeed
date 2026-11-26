@@ -10028,7 +10028,7 @@ function ghostsFinish(win) {
 }
 Object.assign(window.NSRace, { ghostEncode, ghostDecode, setGhosts(list) { race.ghostWorld = save.world || 'neon'; race.ghostSrc = list; } });
 
-const SPY_ENABLED = false;
+const SPY_ENABLED = true;
 /* =====================================================================
    SPY HUNTER MODE — Prototipo
    Fase de suelo: recoge 4 piezas para transformarte en avión.
