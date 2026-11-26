@@ -13912,6 +13912,57 @@ addEventListener('blur', () => { spy.fire = false; });
   b.addEventListener('contextmenu', e => e.preventDefault());
 })();
 
+/* ---------- motor del avión ----------
+   Desde los postquemadores de la transformación hasta el final de la fase aérea se apaga el motor
+   del coche y suena un reactor sintetizado: rugido grave filtrado + siseo de turbina + un silbido
+   muy bajo. Volumen moderado y cambios lentos para que acompañe sin cansar. */
+const _spEngine = AudioSys.engine;
+AudioSys.engine = function (on, ...rest) {
+  const jet = !!on && spy.mode && spy.phase !== 'dead' && spy.phase !== 'win' &&
+    (spy.inAir || (spy.phase === 'transform' && spy.transformT >= TF.WINGS));
+  _spEngine.call(this, jet ? false : on, ...rest);
+  spyJet(this, jet);
+};
+function spyJet(S, on) {
+  if (!S.ready || !S.ctx || !S.noiseBuf) return;
+  let J = S._jet;
+  if (!J) {
+    if (!on) return;
+    const ctx = S.ctx;
+    J = S._jet = {};
+    J.g = ctx.createGain(); J.g.gain.value = 0;
+    let out = J.g;
+    if (ctx.createStereoPanner) { J.pan = ctx.createStereoPanner(); J.g.connect(J.pan); out = J.pan; }
+    out.connect(S.sfxBus);
+    const noise = ctx.createBufferSource(); noise.buffer = S.noiseBuf; noise.loop = true;
+    J.rumF = ctx.createBiquadFilter(); J.rumF.type = 'lowpass'; J.rumF.frequency.value = 500; J.rumF.Q.value = 0.6;
+    const rumG = ctx.createGain(); rumG.gain.value = 0.19;
+    noise.connect(J.rumF); J.rumF.connect(rumG); rumG.connect(J.g);
+    const hissF = ctx.createBiquadFilter(); hissF.type = 'bandpass'; hissF.frequency.value = 2600; hissF.Q.value = 0.9;
+    J.hissG = ctx.createGain(); J.hissG.gain.value = 0.005;
+    noise.connect(hissF); hissF.connect(J.hissG); J.hissG.connect(J.g);
+    J.whine = ctx.createOscillator(); J.whine.type = 'sine'; J.whine.frequency.value = 460;
+    const whG = ctx.createGain(); whG.gain.value = 0.0035;
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 4.3; const lfoG = ctx.createGain(); lfoG.gain.value = 5;
+    lfo.connect(lfoG); lfoG.connect(J.whine.frequency);
+    J.whine.connect(whG); whG.connect(J.g);
+    const sub = ctx.createOscillator(); sub.type = 'sine'; sub.frequency.value = 46;
+    const subG = ctx.createGain(); subG.gain.value = 0.03; sub.connect(subG); subG.connect(J.g);
+    noise.start(); J.whine.start(); lfo.start(); sub.start();
+  }
+  const t = S.ctx.currentTime;
+  if (!on) { J.g.gain.setTargetAtTime(0, t, 0.25); return; }
+  // empuje: sube en el despegue, en los acelerones entre oleadas y al avanzar; baja en precisión
+  let thr;
+  if (spy.phase === 'transform') thr = 0.3 + 0.7 * clamp((spy.transformT - TF.WINGS) / (TF.IGN + 0.8 - TF.WINGS), 0, 1);
+  else thr = clamp(0.45 + clamp((A.scroll - AIR.SCROLL) / (AIR.SCROLL_BOOST - AIR.SCROLL), 0, 1) * 0.35 + clamp(-A.vz / AIR.SPEED, 0, 1) * 0.15 - (A.focus ? 0.12 : 0), 0, 1);
+  J.g.gain.setTargetAtTime(0.7 + 0.3 * thr, t, 0.35);
+  J.rumF.frequency.setTargetAtTime(360 + thr * 520, t, 0.35);
+  J.hissG.gain.setTargetAtTime(0.003 + thr * 0.007, t, 0.35);
+  J.whine.frequency.setTargetAtTime(420 + thr * 240, t, 0.5);
+  if (J.pan) J.pan.pan.setTargetAtTime(spy.inAir ? clamp(spy.planeX / Math.max(1, A.fb.hw), -1, 1) * 0.25 : 0, t, 0.2);
+}
+
 /* ---------- FX ---------- */
 function spyFx(t) {}
 
@@ -14086,7 +14137,7 @@ body.spy-air .tbtn.spy-fire.on { background:rgba(125,249,255,.35); box-shadow:0 
 })();
 
 window.NSSpy = { spy, actions, camera, race, run: () => run, get state() { return state; }, get playerModel() { return playerModel; },
-  beginTransform: spyBeginTransform, air: A, airBomb: () => airBomb(), ebFire: (b, x, z, a, sp) => ebFire(b, x, z, a, sp), equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
+  beginTransform: spyBeginTransform, air: A, audio: AudioSys, airBomb: () => airBomb(), ebFire: (b, x, z, a, sp) => ebFire(b, x, z, a, sp), equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
