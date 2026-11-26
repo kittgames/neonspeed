@@ -10304,11 +10304,12 @@ let _glbPlane = null, _glbBoss = null, _glbEnemy = null, _glbLoading = null;
 
 function preloadSpyModels() {
   if (_glbLoading) return _glbLoading;
-  // Solo se usa plane.glb. El jefe (buildBossV2) y los enemigos aéreos (buildAirEnemy) son
-  // procedurales: oscuros con acentos rojos, se leen mejor sobre las nubes que boss.glb / enemy.glb,
-  // que ya no se descargan (2,6 MB menos). buildBoss() y buildEnemyPlane() siguen aquí por si se recuperan.
+  // plane.glb = avión del jugador; boss.glb = nave nodriza (buildBossV3, con buildBossV2 procedural
+  // de reserva si no ha cargado). Los enemigos aéreos son procedurales (buildAirEnemy), así que
+  // enemy.glb no se descarga.
   _glbLoading = Promise.all([
     fetch('plane.glb').then(r => r.arrayBuffer()).then(buf => { _glbPlane = parseGLB(buf); }).catch(e => { console.warn('plane.glb load failed, using procedural:', e); }),
+    fetch('boss.glb').then(r => r.arrayBuffer()).then(buf => { _glbBoss = parseGLB(buf); }).catch(e => { console.warn('boss.glb load failed, using procedural:', e); }),
   ]);
   return _glbLoading;
 }
@@ -10775,6 +10776,78 @@ function buildPlane() {
 }
 
 /* --- Nave nodriza: fortaleza volante oscura con luces rojas (vista desde arriba) --- */
+/* --- Nave nodriza con el modelo boss.glb (34 m de envergadura) ---
+   Torretas, núcleo, escudo y balizas se colocan sobre la superficie real del modelo
+   (se mide en los vértices). Devuelve lo mismo que buildBossV2 para que el combate no cambie. */
+function buildBossV3() {
+  const S = 44;
+  const root = new THREE.Group();
+  const model = _glbBoss.clone();
+  model.scale.setScalar(S);              // el morro del modelo ya mira a +Z (hacia el jugador)
+  root.add(model);
+  let geo = null;
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    if (!geo) geo = o.geometry;
+    // sin brillo propio (lavaba la textura) y con poco reflejo del cielo
+    o.material = std({ map: o.material.map, color: 0x9ca3ad, metalness: 0.45, roughness: 0.55, envMapIntensity: 0.45, emissive: 0x000000 });
+  });
+  const hullMesh = model.children[0] || model;
+  // puntos de la superficie en coordenadas del jefe
+  const P = geo.attributes.position, pts = [];
+  for (let i = 0; i < P.count; i++) pts.push([P.getX(i) * S, P.getY(i) * S, P.getZ(i) * S]);
+  let noseZ = -1e9; for (const p of pts) if (p[2] > noseZ) noseZ = p[2];
+  const topAt = (x, z, r = 2.2) => { let y = -1e9; for (const p of pts) if ((p[0] - x) ** 2 + (p[2] - z) ** 2 < r * r && p[1] > y) y = p[1]; return y > -1e8 ? y : 1.5; };
+  // puntos altos de la cubierta: de ahí salen chispas y explosiones al dañarse
+  const deck = pts.filter((p, i) => i % 7 === 0 && p[1] > 0.4 * S * 0.09);
+  const dark = std({ color: 0x1c2027, metalness: 0.3, roughness: 0.45, envMapIntensity: 0.4 });
+  const gun = std({ color: 0x0f1115, metalness: 0.3, roughness: 0.4, envMapIntensity: 0.4 });
+  const ringMat = basic({ color: 0xff8a1a });
+  const redGlow = basic({ color: 0xff2414 });
+  const turrets = [];
+  for (const sd of [-1, 1]) {
+    const y0 = topAt(sd * 6, 1);
+    const tBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.85, 1.1, 14), dark);
+    tBase.position.set(sd * 6, y0 + 0.45, 1);
+    root.add(tBase);
+    const tRing = new THREE.Mesh(new THREE.TorusGeometry(1.95, 0.15, 6, 28), ringMat);
+    tRing.rotation.x = Math.PI / 2; tRing.position.set(sd * 6, y0 + 0.15, 1);
+    root.add(tRing);
+    tBase.userData.ring = tRing;
+    const barrel = new THREE.Group();
+    barrel.position.set(sd * 6, y0 + 1.25, 1);
+    barrel.add(new THREE.Mesh(new THREE.BoxGeometry(2.3, 1, 2.2), gun));
+    const bGeo = new THREE.CylinderGeometry(0.22, 0.22, 3.4, 8); bGeo.rotateX(Math.PI / 2);
+    for (const dx of [-0.5, 0.5]) {
+      const b = new THREE.Mesh(bGeo, gun); b.position.set(dx, 0, 2.5); barrel.add(b);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), redGlow); tip.position.set(dx, 0, 4.2); barrel.add(tip);
+    }
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.38, 8, 6), redGlow); eye.position.set(0, 0.55, 0.7); barrel.add(eye);
+    root.add(barrel);
+    turrets.push({ base: tBase, barrel, side: sd, alive: true });
+  }
+  const cy = topAt(0, -1.5, 2.6);
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.7, 16, 12),
+    basic({ color: 0xff3a2a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.position.set(0, cy + 0.7, -1.5);
+  root.add(core);
+  const armor = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    std({ color: 0x0d3a55, metalness: 0.3, roughness: 0.1, transparent: true, opacity: 0.55, emissive: 0x1aa0ff, emissiveIntensity: 0.35 }));
+  armor.position.set(0, cy, -1.5);
+  root.add(armor);
+  const engines = [];   // el modelo es de hélices: sin llamas de reactor
+  // balizas rojas en las puntas de las alas
+  const beacons = [];
+  for (const sd of [-1, 1]) {
+    let tip = pts[0]; for (const p of pts) if (p[0] * sd > tip[0] * sd) tip = p;
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 6), redGlow); b.position.set(tip[0], tip[1] + 0.4, tip[2]);
+    root.add(b); beacons.push(b);
+  }
+  root.visible = false;
+  scene.add(root);
+  return { root, turrets, core, armor, hullMesh, engines, beacons, deck, noseZ, glb: true };
+}
+
 /* chapa del casco: placas de distinto tono, juntas, remaches, franjas de peligro y suciedad */
 function _bossPanelTex() {
   const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
@@ -11779,159 +11852,166 @@ function spyDamage(amount) {
    TRANSFORMACIÓN ESTILO TRANSFORMERS (suelo → aire)
    ============================================================ */
 
-/* -- Piezas de transformación (se crean al iniciar la secuencia) -- */
-let _tfxParts = null;   // array de { mesh, startPos, startRot, startScale, endPos, endRot, endScale, phase }
-let _tfxFlash = null;   // mesh de flash blanco
-let _tfxTrail = null;   // estela de propulsión
+/* =====================================================================
+   TRANSFORMACIÓN COCHE → AVIÓN (cinemática, ~7 s; se puede saltar)
+   0) ARM       los cantos del coche se encienden; la cámara baja a un 3/4 de cine
+   1) HOVER     las ruedas giran hasta quedar planas y se convierten en propulsores; el coche se eleva
+   2) WINGS     las alas salen de los costados, se despliegan y se alargan; canards y derivas
+   3) NOZZLES   salen las toberas y se encienden los postquemadores
+   4) LIFT OFF  despega por la carretera y sube
+   5) CLOUDS    atraviesa una capa de nubes (cubre el cambio de escena)
+   6) EMERGE    el avión sale del mar de nubes con un tonel y la cámara pasa a la vista de juego
+   ===================================================================== */
+const TF = { ARM: 0.8, HOVER: 1.6, WINGS: 2.9, IGN: 3.6, CLOUD: 5.0, SWAP: 5.45, END: 7.0 };
+let _tfRig = null, _tfPuffs = null, _tfUi = null;
 
-function buildTransformParts() {
-  if (_tfxParts) { _tfxParts.forEach(p => scene.remove(p.mesh)); }
-  _tfxParts = [];
+function cleanupTransformParts() { _tfHide(); }
+const _tfEase = { out: t => 1 - Math.pow(1 - t, 3), back: t => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }, io: t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2 };
+const _tfK = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
 
-  // Materiales de la transformación
-  const carMat  = std({ color: 0x0c1a30, metalness: 0.85, roughness: 0.2 });
-  const neonMat = basic({ color: 0x00f0ff, transparent: true, opacity: 0.9,
-    blending: THREE.AdditiveBlending, depthWrite: false });
-  const hotMat  = basic({ color: 0xff2bd6, transparent: true, opacity: 0.8,
-    blending: THREE.AdditiveBlending, depthWrite: false });
-  const sparkMat = basic({ color: 0xffd23f, transparent: true, opacity: 0.9,
-    blending: THREE.AdditiveBlending, depthWrite: false });
-
-  // === PARTE 1: Carrocería central — se alarga y aplana ===
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 3.2), carMat);
-  _tfxParts.push({
-    mesh: chassis,
-    startPos: [0, 0.5, 0], startRot: [0, 0, 0], startScale: [1, 1, 1],
-    endPos: [0, 0, 0],     endRot: [0, 0, 0],   endScale: [1.2, 0.3, 1.5],
-    phase: [0.0, 0.5], // t normalizado inicio-fin
+/* piezas que salen del coche (se cuelgan de su raíz y se adaptan a su tamaño) */
+function _tfBuildRig(m) {
+  const W = (m.halfW || 0.95), L = (m.halfL || 2.2), H = 1.15;
+  const g = new THREE.Group();
+  const carbon = std({ color: 0x111723, metalness: 0.55, roughness: 0.32, envMapIntensity: 0.7 });
+  const panel = std({ color: 0x2a3d5c, metalness: 0.6, roughness: 0.3, envMapIntensity: 0.7 });
+  const neon = basic({ color: 0x00f0ff, transparent: true, opacity: 0 });
+  const pink = basic({ color: 0xff2bd6, transparent: true, opacity: 0 });
+  const flameM = basic({ color: 0x7df9ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const coreM = basic({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const padM = basic({ color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const R = { g, neon, pink, padM, wings: [], canards: [], fins: [], nozzles: [], flames: [], pads: [], seams: [] };
+  // costuras de neón a lo largo del coche (se encienden primero)
+  for (const sd of [-1, 1]) {
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, L * 1.7), sd < 0 ? neon : pink);
+    seam.position.set(sd * (W + 0.02), 0.62, 0); g.add(seam); R.seams.push(seam);
+  }
+  // alas: bisagra en el costado; plegadas hacia arriba, salen, bajan y se alargan
+  const wingGeo = _airShapeGeo([[0, -0.9], [3.1, 0.35], [3.1, 0.85], [0, 1.15]], 0.12, 0.04);
+  const edgeLen = Math.hypot(3.1, 1.25), edgeAng = Math.atan2(1.25, 3.1);
+  for (const sd of [-1, 1]) {
+    const hinge = new THREE.Group(); hinge.position.set(sd * W * 0.92, 0.58, 0.25);
+    const wg = new THREE.Group(); wg.scale.x = sd; hinge.add(wg);
+    wg.add(new THREE.Mesh(wingGeo, carbon));
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(edgeLen, 0.05, 0.07), neon);
+    edge.position.set(1.55, 0.09, -0.28); edge.rotation.y = -edgeAng; wg.add(edge);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.35, 0.55), panel); tip.position.set(3.05, 0.12, 0.62); wg.add(tip);
+    const tipL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.3), pink); tipL.position.set(3.1, 0.32, 0.62); wg.add(tipL);
+    g.add(hinge); R.wings.push({ hinge, wg, sd });
+  }
+  // canards delante
+  const canGeo = _airShapeGeo([[0, -0.35], [1.05, 0.02], [1.05, 0.25], [0, 0.38]], 0.07, 0.02);
+  for (const sd of [-1, 1]) {
+    const c = new THREE.Group(); c.position.set(sd * W * 0.85, 0.72, -L + 0.75);
+    const cm = new THREE.Mesh(canGeo, panel); cm.scale.x = sd; c.add(cm);
+    c.scale.setScalar(0.001); g.add(c); R.canards.push(c);
+  }
+  // derivas detrás
+  for (const sd of [-1, 1]) {
+    const f = new THREE.Group(); f.position.set(sd * 0.48, H * 0.82, L - 0.55);
+    const fm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.0, 0.85), panel); fm.position.y = 0.5; fm.rotation.x = 0.3; f.add(fm);
+    const fl = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.6, 0.06), neon); fl.position.set(0, 0.55, -0.15); fl.rotation.x = 0.3; f.add(fl);
+    f.rotation.z = -sd * Math.PI / 2; f.scale.setScalar(0.001); g.add(f); R.fins.push({ f, sd });
+  }
+  // toberas y llamas
+  const nozGeo = new THREE.CylinderGeometry(0.24, 0.3, 0.85, 14); nozGeo.rotateX(Math.PI / 2);
+  const flGeo = new THREE.ConeGeometry(0.24, 2.0, 12); flGeo.rotateX(Math.PI / 2); flGeo.translate(0, 0, 1.0);
+  const coreGeo = new THREE.ConeGeometry(0.12, 1.1, 10); coreGeo.rotateX(Math.PI / 2); coreGeo.translate(0, 0, 0.55);
+  for (const sd of [-1, 1]) {
+    const n = new THREE.Mesh(nozGeo, carbon); n.position.set(sd * 0.42, 0.52, L - 0.7); g.add(n); R.nozzles.push(n);
+    const fl = new THREE.Group(); fl.add(new THREE.Mesh(flGeo, flameM), new THREE.Mesh(coreGeo, coreM));
+    fl.position.set(sd * 0.42, 0.52, L + 0.05); fl.scale.set(1, 1, 0.001); fl.visible = false; g.add(fl); R.flames.push(fl);
+  }
+  // propulsores donde estaban las ruedas
+  const padGeo = new THREE.TorusGeometry(0.34, 0.07, 6, 24); padGeo.rotateX(Math.PI / 2);
+  (m.wheels || []).forEach(w => {
+    const pad = new THREE.Mesh(padGeo, padM); pad.position.set(w.steer.position.x, 0.06, w.steer.position.z);
+    g.add(pad); R.pads.push(pad);
+    w._tf0 = { x: w.steer.position.x, y: w.steer.position.y, rz: w.steer.rotation.z, ry: w.steer.rotation.y };
   });
-
-  // === PARTE 2: Techo — se separa hacia arriba y se convierte en cabina ===
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.4, 1.8), carMat);
-  _tfxParts.push({
-    mesh: roof,
-    startPos: [0, 1.2, -0.3], startRot: [0, 0, 0], startScale: [1, 1, 1],
-    endPos: [0, 0.4, -1.0],   endRot: [-0.2, 0, 0], endScale: [0.6, 0.6, 0.8],
-    phase: [0.1, 0.55],
-  });
-
-  // === PARTE 3 y 4: Puertas → se abren y giran hasta ser ALAS ===
-  for (let s = -1; s <= 1; s += 2) {
-    const door = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 2.2), carMat);
-    _tfxParts.push({
-      mesh: door,
-      startPos: [s * 0.85, 0.7, 0],   startRot: [0, 0, 0], startScale: [1, 1, 1],
-      endPos: [s * 2.5, 0.1, 0.3],    endRot: [0, 0, s * -0.05], endScale: [0.6, 0.15, 1.3],
-      phase: [0.15, 0.6],
-    });
-  }
-
-  // === PARTE 5 y 6: Ruedas delanteras → se retraen y giran hacia dentro ===
-  for (let s = -1; s <= 1; s += 2) {
-    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
-    _tfxParts.push({
-      mesh: wh,
-      startPos: [s * 0.78, 0.36, -1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
-      endPos: [s * 0.3, 0.1, -1.8],     endRot: [Math.PI / 2, 0, 0],   endScale: [0.5, 0.5, 0.5],
-      phase: [0.05, 0.4],
-    });
-  }
-
-  // === PARTE 7 y 8: Ruedas traseras → se retraen ===
-  for (let s = -1; s <= 1; s += 2) {
-    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.2, 8), std({ color: 0x1a1a1a }));
-    _tfxParts.push({
-      mesh: wh,
-      startPos: [s * 0.78, 0.36, 1.3], startRot: [0, 0, Math.PI / 2], startScale: [1, 1, 1],
-      endPos: [s * 0.4, 0.05, 1.0],    endRot: [Math.PI / 2, 0, 0],   endScale: [0.4, 0.4, 0.4],
-      phase: [0.05, 0.35],
-    });
-  }
-
-  // === PARTE 9: Capó → se alarga hasta ser morro del avión ===
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.5, 1.5), carMat);
-  _tfxParts.push({
-    mesh: hood,
-    startPos: [0, 0.7, -1.8], startRot: [-0.1, 0, 0], startScale: [1, 1, 1],
-    endPos: [0, 0.15, -2.5],  endRot: [-0.05, 0, 0],  endScale: [0.6, 0.35, 1.8],
-    phase: [0.2, 0.6],
-  });
-
-  // === PARTE 10: Maletero → se convierte en cola ===
-  const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.0), carMat);
-  _tfxParts.push({
-    mesh: trunk,
-    startPos: [0, 0.8, 1.5], startRot: [0, 0, 0], startScale: [1, 1, 1],
-    endPos: [0, 0.3, 2.2],   endRot: [0, 0, 0],   endScale: [0.4, 0.8, 0.8],
-    phase: [0.2, 0.55],
-  });
-
-  // === PARTE 11 y 12: Alerones/estabilizadores verticales ===
-  for (let s = -1; s <= 1; s += 2) {
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.7), carMat);
-    _tfxParts.push({
-      mesh: fin,
-      startPos: [s * 0.5, 0.8, 1.5], startRot: [0, 0, s * 0.3], startScale: [0, 0, 0],
-      endPos: [s * 0.5, 0.6, 2.0],   endRot: [0, 0, s * 0.1],   endScale: [1, 1, 1],
-      phase: [0.4, 0.7],
-    });
-  }
-
-  // === Líneas neón que aparecen durante la transformación ===
-  for (let i = 0; i < 6; i++) {
-    const line = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, rand(1.5, 3.5)), neonMat);
-    _tfxParts.push({
-      mesh: line,
-      startPos: [rand(-1, 1), rand(0.2, 1.2), rand(-2, 2)], startRot: [0, rand(-0.5, 0.5), 0], startScale: [0, 0, 0],
-      endPos: [rand(-2.5, 2.5), rand(-0.1, 0.3), rand(-2, 2)], endRot: [0, 0, 0], endScale: [1, 1, 1],
-      phase: [0.3, 0.65],
-      fadeOut: true, // desaparecen al final
-    });
-  }
-
-  // Flash de energía
-  if (!_tfxFlash) {
-    _tfxFlash = new THREE.Mesh(
-      new THREE.SphereGeometry(6, 12, 8),
-      basic({ color: 0x00f0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide })
-    );
-    scene.add(_tfxFlash);
-  }
-  _tfxFlash.visible = false;
-
-  // Añadir todas las piezas a la escena (ocultas)
-  _tfxParts.forEach(p => { p.mesh.visible = false; scene.add(p.mesh); });
+  m.root.add(g);
+  return R;
 }
-
-function cleanupTransformParts() {
-  if (_tfxParts) {
-    _tfxParts.forEach(p => scene.remove(p.mesh));
-    _tfxParts = null;
+function _tfRestoreCar() {
+  const m = playerModel;
+  if (_tfRig && _tfRig.g.parent) _tfRig.g.parent.remove(_tfRig.g);
+  _tfRig = null;
+  if (!m) return;
+  (m.wheels || []).forEach(w => {
+    if (!w._tf0) return;
+    w.steer.position.x = w._tf0.x; w.steer.position.y = w._tf0.y; w.steer.rotation.z = w._tf0.rz; w.steer.rotation.y = w._tf0.ry; w._tf0 = null;
+  });
+  m.body.rotation.set(0, 0, 0); m.root.rotation.set(0, 0, 0); m.root.position.y = 0; m.root.position.z = 0;
+}
+/* nubes que atraviesa la cámara al subir (tapan el cambio de escena) */
+function _tfPuffsBuild() {
+  if (_tfPuffs) return _tfPuffs;
+  const texs = [_spPuffTex(11), _spPuffTex(12), _spPuffTex(13)];
+  _tfPuffs = [];
+  for (let i = 0; i < 12; i++) {
+    const q = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: texs[i % 3], transparent: true, opacity: 0, depthWrite: false, depthTest: false, fog: false, toneMapped: false }));
+    q.renderOrder = 50; q.visible = false; q.userData.spyKeep = true;
+    q.userData.d = 10 + i * 5; q.userData.ox = rand(-1, 1); q.userData.oy = rand(-1, 1); q.userData.s = rand(14, 24);
+    scene.add(q); _tfPuffs.push(q);
   }
-  if (_tfxFlash) _tfxFlash.visible = false;
+  return _tfPuffs;
 }
-
-/* Transformación cinemática (sin control): el coche se eleva envuelto en
-   energía, destello, aparece el avión y sube en vertical; fundido a blanco
-   y entramos en el cielo (entorno de nubes). Duración total: TF.END s. */
-const TF = { LIFT: 1.1, CHARGE: 2.5, POP: 2.75, CLIMB: 3.9, WHITE: 4.3, END: 5.4 };
-let _tfShell = null, _tfRing = null;
-function _tfBuild() {
-  if (_tfShell) return;
-  _tfShell = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14),
-    basic({ color: 0x9ff8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
-  _tfShell.scale.set(1.6, 1.0, 2.8);
-  _tfRing = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.08, 6, 40),
-    basic({ color: 0xff2bd6, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
-  _tfRing.rotation.x = Math.PI / 2;
-  scene.add(_tfShell); scene.add(_tfRing);
+const _tfFwd = new THREE.Vector3(), _tfRight = new THREE.Vector3(), _tfUp = new THREE.Vector3();
+function _tfPuffsTick(dt, alpha) {
+  const P = _tfPuffsBuild();
+  camera.getWorldDirection(_tfFwd);
+  _tfRight.crossVectors(_tfFwd, camera.up).normalize(); _tfUp.crossVectors(_tfRight, _tfFwd).normalize();
+  P.forEach(q => {
+    const u = q.userData;
+    q.visible = alpha > 0.01;
+    if (!q.visible) return;
+    u.d -= 70 * dt;
+    if (u.d < 1.5) { u.d += 60; u.ox = rand(-1, 1); u.oy = rand(-1, 1); }
+    q.position.copy(camera.position).addScaledVector(_tfFwd, u.d).addScaledVector(_tfRight, u.ox * u.d * 0.6).addScaledVector(_tfUp, u.oy * u.d * 0.4);
+    q.quaternion.copy(camera.quaternion);
+    q.scale.setScalar(u.s);
+    q.material.opacity = alpha * clamp(u.d / 8, 0, 1) * 0.95;
+  });
 }
-function _tfHide() { if (_tfShell) { _tfShell.visible = false; _tfRing.visible = false; } }
+/* rótulos de la cinemática (fuera de #hud, que se oculta en la cinemática) */
+function _tfUiShow(on) {
+  if (!_tfUi) {
+    _tfUi = document.createElement('div'); _tfUi.id = 'spy-tfx';
+    _tfUi.innerHTML = '<i class="tb t"></i><i class="tb b"></i><div class="tfx-title">TRANSFORM</div><div class="tfx-step" id="tfx-step"></div><div class="tfx-skip">' + (IS_TOUCH ? 'TAP' : 'PRESS SPACE') + ' TO SKIP</div>';
+    document.body.appendChild(_tfUi);
+  }
+  _tfUi.classList.toggle('on', !!on);
+  if (!on) _tfUi.dataset.step = '';
+}
+function _tfStep(id, text) {
+  if (!_tfUi || _tfUi.dataset.step === id) return;
+  _tfUi.dataset.step = id;
+  const el = document.getElementById('tfx-step');
+  el.innerHTML = text; el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+}
+function _tfClunk(f) {
+  if (!AudioSys.ready) return;
+  AudioSys.tone(f || 95, 0.14, { type: 'square', vol: 0.1, to: (f || 95) * 0.5 });
+  AudioSys.sfx('click');
+}
+function _tfHide() {
+  _tfRestoreCar();
+  _tfUiShow(false);
+  if (_tfPuffs) _tfPuffs.forEach(q => { q.visible = false; });
+}
+/* saltar la cinemática: va directa a la capa de nubes */
+function _tfSkip() {
+  if (spy.phase !== 'transform' || !spy.tf || spy.transformT >= TF.CLOUD - 0.3 || spy.transformT < 0.4) return;
+  spy.transformT = TF.CLOUD - 0.3;
+  spy.tf.skipped = true;
+}
+addEventListener('keydown', e => { if (spy.mode && spy.phase === 'transform' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyX')) { e.preventDefault(); _tfSkip(); } });
+addEventListener('pointerdown', () => { if (spy.mode && spy.phase === 'transform') _tfSkip(); }, { passive: true });
 
 function spyBeginTransform() {
   spy.phase = 'transform';
   spy.transformT = 0;
-  spy.tf = { x: player.x, carY: 0, swapped: false, entered: false, planeY: 0, planeZ: 0 };
+  spy.tf = { x: player.x, carY: 0, carZ: 0, swapped: false, cam0: null, crossed: false, clunks: {} };
   spy.iframes = 99;
   // fuera todo lo que pueda golpear o distraer durante la cinemática
   while (traffic.length) releaseVehicle(traffic.pop());
@@ -11940,112 +12020,167 @@ function spyBeginTransform() {
   spy.bullets.forEach(b => scene.remove(b.mesh)); spy.bullets = [];
   spy.bombProjs.forEach(b => scene.remove(b.mesh)); spy.bombProjs = [];
   spyClearPickups();
-  _tfBuild();
-  _tfShell.visible = true; _tfRing.visible = true;
-  if (playerModel) playerModel.root.visible = true;
-  toast('🛩️ TRANSFORMATION', 'Taking flight…', '#ff2bd6');
+  _tfRestoreCar();
+  if (playerModel) { playerModel.root.visible = true; _tfRig = _tfBuildRig(playerModel); }
+  spy.tf.cam0 = { pos: spy.cam.pos.clone(), look: spy.cam.look.clone(), fov: spy.cam.fov };
+  _tfUiShow(true);
+  _tfStep('arm', '<b>MODE SHIFT</b> // AIR CONFIGURATION');
   AudioSys.sfx('powerup');
 }
 
 function spyUpdateTransform(dt) {
   if (!spy.tf) spyBeginTransform();
   spy.transformT += dt;
-  const t = spy.transformT, T = spy.tf, px = T.x, m = playerModel;
-  const cam = spy.cam;
+  const t = spy.transformT, T = spy.tf, px = T.x, m = playerModel, R = _tfRig, cam = spy.cam;
+  const once = (id, fn) => { if (!T.clunks[id]) { T.clunks[id] = true; fn(); } };
 
-  if (t < TF.POP) {
-    /* 1) el coche flota y se carga de energía */
-    const lift = smooth(0, TF.LIFT, t), charge = smooth(TF.LIFT, TF.CHARGE, t);
-    T.carY = lift * 0.7 + charge * charge * 3.3;
+  if (t < TF.SWAP) {
+    /* ---------- en la carretera ---------- */
+    const kHover = _tfEase.out(_tfK(t, TF.ARM, TF.HOVER));
+    const kLift = _tfK(t, TF.IGN, TF.SWAP);
+    T.carY = kHover * 0.9 + Math.sin(t * 6) * 0.06 * kHover + kLift * kLift * 36;
+    T.carZ = -kLift * kLift * 55;
     if (m) {
       m.root.visible = true;
-      m.root.position.set(px, T.carY, 0);
-      m.root.rotation.y = 0;
-      m.body.rotation.x = -0.32 * charge;
-      m.body.rotation.z = Math.sin(t * 9) * 0.04 * lift;
+      m.root.position.set(px, T.carY, T.carZ);
+      m.root.rotation.set(0, 0, 0);
+      // cabeceo: morro arriba al despegar, temblor en la ignición
+      const ign = _tfK(t, TF.WINGS, TF.IGN);
+      m.body.rotation.x = 0.28 * _tfEase.io(_tfK(t, TF.IGN - 0.2, TF.IGN + 0.6)) + (ign > 0 && ign < 1 ? Math.sin(t * 60) * 0.012 : 0);
+      m.body.rotation.z = Math.sin(t * 3.1) * 0.03 * kHover;
+      // ruedas → propulsores planos
+      const kw = _tfEase.back(_tfK(t, TF.ARM, TF.ARM + 0.55));
+      (m.wheels || []).forEach(w => {
+        if (!w._tf0) return;
+        const sd = Math.sign(w._tf0.x) || 1;
+        w.steer.rotation.z = w._tf0.rz + sd * kw * Math.PI / 2;
+        w.steer.position.x = w._tf0.x * (1 - 0.12 * kw);
+        w.steer.position.y = w._tf0.y + 0.08 * kw;
+      });
     }
-    _tfShell.position.set(px, T.carY + 0.7, 0);
-    _tfShell.material.opacity = 0.08 + 0.55 * charge + Math.sin(t * 30) * 0.05 * lift;
-    _tfShell.scale.set(1.6 - 0.3 * charge, 1.0, 2.8 - 0.5 * charge);
-    _tfRing.position.set(px, T.carY + 0.2, 0);
-    _tfRing.material.opacity = 0.8 * lift;
-    const rs = 1 + ((t * 1.6) % 1) * 0.8 - charge * 0.6;
-    _tfRing.scale.set(rs, rs, rs);
-    if (Math.random() < 0.5 + charge) {
-      burst(px + rand(-1.4, 1.4), T.carY + rand(0, 1.4), rand(-2, 2), 2, {
-        colors: [[0, 0.94, 1], [1, 0.17, 0.84], [1, 1, 1]], speed: 3, up: 4, life: 0.5, size: 0.25, spread: 0.3, grav: -2 });
+    if (R) {
+      // costuras de neón
+      const kSeam = _tfK(t, 0.1, 0.6);
+      R.neon.opacity = R.pink.opacity = kSeam * (0.85 + 0.15 * Math.sin(t * 20));
+      // propulsores: anillos que laten
+      R.padM.opacity = _tfK(t, TF.ARM + 0.2, TF.HOVER) * (0.7 + 0.3 * Math.sin(t * 18));
+      R.pads.forEach((p, i) => { const sc = 1 + 0.25 * Math.sin(t * 14 + i); p.scale.set(sc, 1, sc); });
+      // alas: salen plegadas (0), bajan con rebote (1), se alargan (2)
+      const kOut = _tfEase.out(_tfK(t, TF.HOVER, TF.HOVER + 0.35));
+      const kDown = _tfEase.back(_tfK(t, TF.HOVER + 0.35, TF.HOVER + 0.85));
+      const kExt = _tfEase.back(_tfK(t, TF.HOVER + 0.85, TF.HOVER + 1.2));
+      R.wings.forEach(w => {
+        w.hinge.rotation.z = w.sd * (Math.PI / 2) * (1 - kDown);
+        w.wg.scale.set(w.sd * (0.02 + 0.43 * kOut + 0.55 * kExt), 1, 0.6 + 0.4 * kExt);
+      });
+      const kCan = _tfEase.back(_tfK(t, TF.HOVER + 0.6, TF.HOVER + 0.9));
+      R.canards.forEach(c => c.scale.setScalar(Math.max(0.001, kCan)));
+      const kFin = _tfEase.back(_tfK(t, TF.HOVER + 0.9, TF.HOVER + 1.25));
+      R.fins.forEach(f => { f.f.scale.setScalar(Math.max(0.001, kFin)); f.f.rotation.z = -f.sd * ((Math.PI / 2) * (1 - kFin) + 0.22 * kFin); });
+      const kNoz = _tfEase.back(_tfK(t, TF.WINGS - 0.35, TF.WINGS));
+      R.nozzles.forEach(n => { n.position.z = (m ? m.halfL : 2.2) - 0.7 + 0.75 * kNoz; });
+      // postquemadores
+      const kIgn = _tfK(t, TF.WINGS, TF.WINGS + 0.25), kBoost = _tfK(t, TF.IGN, TF.IGN + 0.4);
+      R.flames.forEach((f, i) => {
+        f.visible = kIgn > 0;
+        f.position.z = (m ? m.halfL : 2.2) + 0.05 + 0.75 * kNoz;
+        const fl = (0.85 + 0.25 * Math.sin(t * 50 + i * 2)) * (0.5 * kIgn + 1.1 * kBoost);
+        f.scale.set(0.9 + 0.3 * kBoost, 0.9 + 0.3 * kBoost, Math.max(0.001, fl));
+      });
     }
-    // cámara: de cenital baja a un 3/4 lateral y sube con el coche
-    const k = smooth(0, 1.2, t);
-    cam.pos.set(px + lerp(0, 7.5, k), lerp(30, 2.6 + T.carY * 0.8, k), lerp(10, 6.5, k));
-    cam.look.set(px, T.carY + 0.8, lerp(-5, -0.5, k));
-    cam.fov = lerp(62, 50, k);
+    // chispas, golpes metálicos y temblores en cada paso
+    if (t > TF.ARM && t < TF.HOVER && Math.random() < 0.6) burst(px + rand(-1, 1), 0.1, rand(-1.5, 1.5), 2, { colors: [[1, 0.85, 0.4], [1, 0.5, 0.1]], speed: 5, up: 3, life: 0.35, size: 0.25, spread: 0.2, grav: 9 });
+    if (t >= TF.ARM) once('hover', () => { _tfStep('hover', '<em>01</em> HOVER DRIVE'); _tfClunk(120); shake = 0.35; if (AudioSys.ready) AudioSys.tone(180, 0.6, { type: 'sawtooth', vol: 0.05, to: 520 }); });
+    if (t >= TF.HOVER) once('wout', () => { _tfStep('wings', '<em>02</em> WINGS DEPLOYED'); _tfClunk(90); });
+    if (t >= TF.HOVER + 0.75) once('wdown', () => { _tfClunk(70); shake = 0.45; for (const sd of [-1, 1]) burst(px + sd * 2.6, T.carY + 0.6, 0.3, 14, { colors: [[0, 0.94, 1], [1, 1, 1]], speed: 6, up: 3, life: 0.4, size: 0.3, spread: 0.3, grav: 4 }); });
+    if (t >= TF.HOVER + 1.05) once('wext', () => _tfClunk(110));
+    if (t >= TF.WINGS - 0.3) once('noz', () => { _tfStep('noz', '<em>03</em> JET NOZZLES'); _tfClunk(80); });
+    if (t >= TF.WINGS) once('ign', () => { _tfStep('ign', '<em>04</em> AFTERBURNER'); AudioSys.sfx('nitro'); shake = 0.6; });
+    if (t >= TF.IGN) once('lift', () => { _tfStep('lift', '<b>LIFT OFF</b>'); AudioSys.sfx('blowoff'); shake = 0.9; burst(px, 0.3, 2.5, 40, { colors: [[0.7, 0.95, 1], [1, 1, 1], [0.4, 0.5, 0.6]], speed: 12, up: 4, life: 0.8, size: 0.6, spread: 1, grav: 1 }); });
+    if (t > TF.WINGS && Math.random() < 0.8) burst(px + rand(-0.4, 0.4), T.carY + 0.5, T.carZ + (m ? m.halfL : 2.2) + 1.5, 2, { colors: [[0, 0.94, 1], [0.7, 0.9, 1], [1, 1, 1]], speed: 3, up: 0.5, life: 0.35, size: 0.4, spread: 0.2, grav: 0, vz: 12 });
+
+    /* cámara de cine: 3/4 delantero → bajo junto a las ruedas → 3/4 trasero alto → detrás → persecución */
+    const shots = [
+      [0, { p: [0, 0, 0], l: [0, 0, 0] }],
+      [TF.ARM, { p: [5.4, 1.6, -4.2], l: [0, 0.8, 0.2] }],
+      [TF.HOVER, { p: [4.6, 1.0, -2.2], l: [0, 0.7, 0.6] }],
+      [TF.WINGS, { p: [4.2, 3.4, 5.2], l: [0, 0.9, -0.6] }],
+      [TF.IGN, { p: [1.6, 1.7, 7.5], l: [0, 1.2, -2.5] }],
+    ];
+    let pA, pB, k;
+    if (t < TF.ARM) {
+      // desde la cámara de juego
+      const c0 = T.cam0; k = _tfEase.io(t / TF.ARM);
+      const b = shots[1][1];
+      cam.pos.set(lerp(c0.pos.x, px + b.p[0], k), lerp(c0.pos.y, T.carY + b.p[1], k), lerp(c0.pos.z, T.carZ + b.p[2], k));
+      cam.look.set(lerp(c0.look.x, px + b.l[0], k), lerp(c0.look.y, T.carY + b.l[1], k), lerp(c0.look.z, T.carZ + b.l[2], k));
+      cam.fov = lerp(c0.fov, 48, k);
+    } else if (t < TF.IGN) {
+      let i = 1; while (i < shots.length - 1 && t >= shots[i + 1][0]) i++;
+      pA = shots[i]; pB = shots[Math.min(i + 1, shots.length - 1)];
+      k = _tfEase.io(_tfK(t, pA[0], pB[0]));
+      const a = pA[1], b = pB[1];
+      cam.pos.set(px + lerp(a.p[0], b.p[0], k), T.carY + lerp(a.p[1], b.p[1], k), T.carZ + lerp(a.p[2], b.p[2], k));
+      cam.look.set(px + lerp(a.l[0], b.l[0], k), T.carY + lerp(a.l[1], b.l[1], k), T.carZ + lerp(a.l[2], b.l[2], k));
+      cam.fov = 48;
+    } else {
+      // persecución desde atrás y abajo, mirando cómo sube
+      const u = _tfK(t, TF.IGN, TF.SWAP);
+      cam.pos.set(px + lerp(1.6, 0.8, u), T.carY * 0.72 + lerp(1.7, 0.5, u), T.carZ + lerp(7.5, 11, u));
+      cam.look.set(px, T.carY + 1.2, T.carZ - lerp(2.5, 9, u));
+      cam.fov = lerp(48, 62, u);
+    }
     cam.snap = true;
+    // capa de nubes: la cámara las atraviesa y el blanco tapa el cambio de escena
+    const kc = _tfK(t, TF.CLOUD - 0.4, TF.SWAP);
+    _tfPuffsTick(dt, kc);
+    if (t > TF.CLOUD) spyWhite(0.92 * _tfK(t, TF.CLOUD, TF.SWAP), 1);
   } else {
-    /* 2) destello: el coche se convierte en el avión */
+    /* ---------- sobre el mar de nubes ---------- */
     if (!T.swapped) {
       T.swapped = true;
-      if (m) { m.root.visible = false; m.body.rotation.set(0, 0, 0); m.root.position.y = 0; }
-      spyWhite(0.85, 0.05);
-      burst(px, T.carY + 0.7, 0, 60, { colors: [[1, 1, 1], [0, 0.94, 1], [1, 0.17, 0.84]], speed: 18, up: 6, life: 0.7, size: 0.6, spread: 1, grav: 0 });
-      shake = 0.8;
-      AudioSys.sfx('nitro');
+      _tfRestoreCar();
+      if (m) m.root.visible = false;
+      spyWhite(0.92, 1);
+      spyAirEnv(true);
+      airPlace(px);
       spy.plane.root.visible = true;
-    }
-    _tfShell.material.opacity *= Math.exp(-8 * dt);
-    _tfRing.material.opacity *= Math.exp(-8 * dt);
-    if (t > TF.POP + 0.4) _tfHide();
-    if (t > TF.POP + 0.15 && t < TF.WHITE) spyWhite(0, 0.35);
-
-    if (!T.entered) {
-      /* 3) el avión despega en vertical hacia el cielo */
-      const pop = smooth(TF.POP, TF.POP + 0.35, t), climb = smooth(TF.POP + 0.2, TF.WHITE, t);
-      const sc = Math.min(1.35, pop * 1.5);
-      T.planeY = T.carY + climb * climb * 34;
-      T.planeZ = -climb * 40;
-      spy.plane.root.scale.setScalar(Math.max(0.01, sc));
-      spy.plane.root.position.set(px, T.planeY, T.planeZ);
+      spy.plane.root.scale.setScalar(AIR.PLANE_SCALE);
       spy.plane.root.rotation.set(0, 0, 0);
-      spy.plane.body.rotation.set(0.55 * climb, 0, Math.sin(t * 4) * 0.12);
-      spyThrusters(1.4);
-      if (Math.random() < 0.9) burst(px + rand(-0.5, 0.5), T.planeY - 0.4, T.planeZ + 3, 3, {
-        colors: [[0, 0.94, 1], [0.6, 0.85, 1], [1, 1, 1]], speed: 3, up: -2, life: 0.5, size: 0.5, spread: 0.3, grav: 0 });
-      // la cámara se queda abajo y sigue al avión mirando hacia arriba
-      const ck = 1 - climb;
-      cam.pos.set(px + 1.5 + 5 * ck, T.planeY * 0.75 + 3 + 0.2 * ck, T.planeZ + 10 + 2 * ck);
-      cam.look.set(px, T.planeY + 0.5, T.planeZ - 2);
-      cam.fov = lerp(50, 60, climb);
-      cam.snap = true;
-      // 4) fundido a blanco
-      if (t > TF.CLIMB) spyWhite(smooth(TF.CLIMB, TF.WHITE, t), 1);
-      if (t >= TF.WHITE) {
-        T.entered = true;
-        spyWhite(1, 1);
-        spyAirEnv(true);
-        airPlace(px);
-        spy.plane.root.scale.setScalar(AIR.PLANE_SCALE);
-      }
-    } else {
-      /* 5) se abre el blanco: el avión vuela sobre las nubes y la cámara
-            pasa de detrás del avión a la vista cenital */
-      const k = smooth(TF.WHITE, TF.END, t);
-      spyWhite(1 - smooth(TF.WHITE, TF.WHITE + 0.6, t), 1);
-      spy.plane.root.position.set(spy.planeX, SPY.AIR_Y, spy.planeZ);
-      spy.plane.body.rotation.set(lerp(0.25, 0, k), 0, Math.sin(t * 2.5) * 0.25 * (1 - k));
-      spyThrusters(1.2);
-      const air = spyAirCamTarget();
-      cam.pos.set(lerp(spy.planeX, air.pos.x, k), lerp(SPY.AIR_Y + 6, air.pos.y, k), lerp(spy.planeZ + 18, air.pos.z, k));
-      cam.look.set(lerp(spy.planeX, air.look.x, k), lerp(SPY.AIR_Y + 1, air.look.y, k), lerp(spy.planeZ - 20, air.look.z, k));
-      cam.fov = lerp(60, 62, k);
-      cam.snap = true;
-      if (t >= TF.END) {
-        _tfHide();
-        spyWhite(0, 1);
-        spy.tf = null;
-        spy.iframes = 1.5;
-        spy.phase = 'air';
-        airEnter();
-      }
+      _tfStep('air', '<b>AIRSPACE</b>');
+      AudioSys.sfx('nitro');
+    }
+    const u = _tfK(t, TF.SWAP, TF.SWAP + 0.95);
+    const y = lerp(AIR_FLOOR - 7, SPY.AIR_Y, _tfEase.out(u));
+    spy.plane.root.position.set(spy.planeX, y, spy.planeZ);
+    // tonel al salir de las nubes
+    const roll = _tfEase.io(_tfK(t, TF.SWAP + 0.55, TF.SWAP + 1.35));
+    spy.plane.body.rotation.set(lerp(-0.45, 0, _tfEase.out(u)), 0, -roll * Math.PI * 2);
+    spyThrusters(1.4);
+    if (!T.crossed && y > AIR_FLOOR) {
+      T.crossed = true;
+      burst(spy.planeX, AIR_FLOOR + 1, spy.planeZ, 50, { colors: [[1, 1, 1], [0.85, 0.92, 1]], speed: 10, up: 8, life: 1, size: 1.1, spread: 2, grav: -1 });
+      shake = 0.5;
+    }
+    if (Math.random() < 0.9) burst(spy.planeX + rand(-0.5, 0.5), y, spy.planeZ + 3, 2, { colors: [[0, 0.94, 1], [1, 1, 1]], speed: 2, up: 0, life: 0.4, size: 0.5, spread: 0.3, grav: 0, vz: 10 });
+    spyWhite(0.92 * (1 - _tfK(t, TF.SWAP, TF.SWAP + 0.45)), 1);
+    _tfPuffsTick(dt, 1 - _tfK(t, TF.SWAP, TF.SWAP + 0.5));
+    // cámara: detrás del avión, de lado → vista de juego
+    const air = spyAirCamTarget();
+    const kc = _tfEase.io(_tfK(t, TF.SWAP + 0.6, TF.END));
+    const fx = spy.planeX + 7, fy = SPY.AIR_Y + 3, fz = spy.planeZ + 15;
+    cam.pos.set(lerp(fx, air.pos.x, kc), lerp(fy, air.pos.y, kc), lerp(fz, air.pos.z, kc));
+    cam.look.set(lerp(spy.planeX, air.look.x, kc), lerp(y - 1, air.look.y, kc), lerp(spy.planeZ - 8, air.look.z, kc));
+    cam.fov = lerp(58, AIR.FOV, kc);
+    cam.snap = true;
+    if (t >= TF.END) {
+      _tfHide();
+      spyWhite(0, 1);
+      spy.plane.body.rotation.set(0, 0, 0);
+      spy.tf = null;
+      spy.iframes = 1.5;
+      spy.phase = 'air';
+      airEnter();
     }
   }
 }
@@ -12596,7 +12731,7 @@ function airPad() {
 function airMove(dt) {
   const fb = A.fb;
   const xMin = -fb.hw + 1.6, xMax = fb.hw - 1.6;
-  const zMin = Math.max(fb.zT + fb.H * 0.22, A.boss && spy.phase === 'boss' ? A.boss.z + 11 * A.boss.s : -1e9), zMax = fb.zB - 3;
+  const zMin = Math.max(fb.zT + fb.H * 0.22, A.boss && spy.phase === 'boss' ? A.boss.z + ((spy.boss && spy.boss.noseZ) || 10) * A.boss.s + 1 : -1e9), zMax = fb.zB - 3;
   const pad = airPad();
   if (pad && pad.bombDown) airBomb();
   if (pad && pad.startDown && state === 'playing') pauseGame();
@@ -13001,6 +13136,8 @@ function _bossMats(B) {
   return B.mats;
 }
 function airStartBoss() {
+  // el modelo 3D se usa si ya ha cargado (si no, queda la nave procedural)
+  if (_glbBoss && spy.boss && !spy.boss.glb) { scene.remove(spy.boss.root); spy.boss = buildBossV3(); }
   const fb = A.fb, sb = spy.boss;
   spy.phase = 'boss';
   const s = clamp(fb.hw * 2 / 36, 0.55, 1);
@@ -13154,8 +13291,17 @@ function airBossTick(dt) {
     const want = clamp(Math.atan2(spy.planeX - tx, spy.planeZ - tz), -1.1, 1.1);
     t.barrel.rotation.y += (want - t.barrel.rotation.y) * (1 - Math.exp(-dt * 6));
   });
-  // motores y núcleo
+  // motores, balizas y daños visibles (chispas y explosiones en la cubierta según la vida perdida)
   if (sb.engines) sb.engines.forEach((f, i) => { const k = 0.85 + 0.25 * Math.sin(simTime * 22 + i * 1.7); f.scale.set(1, k, 1); });
+  if (sb.beacons) sb.beacons.forEach((b, i) => { b.visible = Math.floor(B.t * 2 + i * 0.5) % 2 === 0; });
+  if (sb.deck && sb.deck.length && !B.intro) {
+    const lost = 1 - (Math.max(0, B.hp[0]) + Math.max(0, B.hp[1]) + Math.max(0, B.core)) / (AIR.TURRET_HP * 2 + AIR.CORE_HP);
+    if (Math.random() < lost * dt * 14) {
+      const p = sb.deck[(Math.random() * sb.deck.length) | 0];
+      burst(B.x + p[0] * s, SPY.AIR_Y - 2.5 + p[1] * s, B.z + p[2] * s, 3, { colors: [[1, 0.6, 0.15], [1, 0.3, 0.05], [1, 0.9, 0.5]], speed: 4, up: 6, life: 0.6, size: 0.55, spread: 0.4, grav: -1 });
+    }
+    if (B.phase === 3 && Math.random() < dt * 1.6) { const p = sb.deck[(Math.random() * sb.deck.length) | 0]; airBoom(B.x + p[0] * s, B.z + p[2] * s, 1.2); }
+  }
   const cs = sb.core.scale.x;
   const pulse = B.phase === 3 ? 1 + 0.08 * Math.sin(B.t * 14) : 1;
   sb.core.scale.setScalar(cs > pulse ? Math.max(pulse, cs - dt * 3) : pulse);
@@ -13194,7 +13340,7 @@ function airBossTick(dt) {
   }
   if (B.atkT > 0) return;
   const step = B.step++;
-  const noseX = B.x, noseZ = B.z + 10 * s;
+  const noseX = B.x, noseZ = B.z + ((sb.noseZ || 10) - 0.5) * s;
   if (B.phase === 1) {
     const k = step % 4;
     if (k === 0 || k === 2) { B.burst = 3; B.atkT = 1.3; }
@@ -13243,6 +13389,7 @@ function airReset() {
   A.waveIdx = 0; A.waveT = 0; A.waveOn = false; A.waveGap = 1.2;
   A.bombs = AIR.BOMBS; A.pow = 1; A.chain = 0; A.chainT = 0; A.hitstop = 0; A.vx = A.vz = 0; A.t = 0;
   A.shotCd = A.misCd = 0; A.focus = false; A.touch = false; A.hintT = 0;
+  A.camX = 0; A.roll = 0; A.scroll = AIR.SCROLL; A.fovPunch = 0;
   if (A.boss && A.boss.mats) A.boss.mats.forEach(m => { m.emissive.setHex(m.userData.e0.c); m.emissiveIntensity = m.userData.e0.i; });
   A.boss = null;
   airTouch.id = null;
@@ -13538,29 +13685,6 @@ function _spPuffTex(seed) {
   pass(-6, -7, 'rgba(255,255,255,A)', 0.62);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
-/* pico rocoso low-poly con nieve en la cima (colores por vértice, sombreado plano) */
-function _spPeak(seed) {
-  let st = seed * 69621 + 7;
-  const r = (a, b) => { st = (st * 48271) % 2147483647; return a + (b - a) * st / 2147483647; };
-  const H = r(24, 32), R = r(6.5, 10);
-  const g = new THREE.ConeGeometry(R, H, 9, 5);
-  const pos = g.attributes.position, col = [];
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i), k = (y + H / 2) / H;           // 0 base → 1 cima
-    if (k < 0.98) {
-      const a = Math.atan2(pos.getZ(i), pos.getX(i)), j = 1 + 0.22 * Math.sin(a * 3 + seed) + r(-0.12, 0.12);
-      pos.setX(i, pos.getX(i) * j); pos.setZ(i, pos.getZ(i) * j); pos.setY(i, y + r(-0.6, 0.6) * (1 - k));
-    }
-    // roca oscura (valores lineales) y nieve solo en la cima
-    const snow = k > 0.9 ? 1 : k > 0.84 ? 0.55 : 0;
-    const rock = 0.07 + r(-0.015, 0.02);
-    col.push(rock * 1.05 + (0.92 - rock) * snow, rock + (0.94 - rock) * snow, rock * 1.15 + (1 - rock * 1.15) * snow);
-  }
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  g.translate(0, H / 2, 0);
-  g.computeVertexNormals();
-  return new THREE.Mesh(g);
-}
 function _spBuildAir() {
   const grp = new THREE.Group();
   grp.userData.spyAir = true;
@@ -13593,24 +13717,9 @@ function _spBuildAir() {
     q.renderOrder = high ? 10 : 2;
     grp.add(q); puffs.push(q);
   }
-  // picos nevados que asoman entre las nubes: dan profundidad y paralaje al scroll
-  const peaks = [];
-  const peakMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92, metalness: 0 });
-  for (let i = 0; i < 9; i++) {
-    const pk = _spPeak(i);
-    pk.material = peakMat;
-    pk.position.set(rand(-75, 75), FLOOR_Y - 20, -150 + i * 24 + rand(-8, 8));
-    pk.rotation.y = rand(0, Math.PI * 2);
-    pk.renderOrder = 1;
-    // bruma en la base: el pico sale de entre las nubes en vez de cortarse contra el suelo
-    const mist = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: texs[i % 3], transparent: true, opacity: 0.95, depthWrite: false, fog: false, toneMapped: false }));
-    mist.rotation.x = -Math.PI / 2; mist.position.y = 21.5; mist.scale.set(30, 22, 1); mist.renderOrder = 2;
-    pk.add(mist);
-    grp.add(pk); peaks.push(pk);
-  }
   // luz propia para que el avión se vea siempre de día
   grp.add(new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25));
-  return { grp, t1, t2, tile1, tile2, puffs, peaks };
+  return { grp, t1, t2, tile1, tile2, puffs };
 }
 function _spKeep(o) {
   return o === _spAir.grp || o.isLight || o === sky || o.isPoints ||
@@ -13657,10 +13766,7 @@ function spyAirTick(dt) {
     q.position.z += q.userData.v * sp * dt;
     if (q.position.z > q.userData.zMax) { q.position.z = q.userData.zMin - rand(0, 40); q.position.x = rand(-85, 85); }
   });
-  T.peaks.forEach(pk => {
-    pk.position.z += sp * 1.15 * dt;   // la cima está algo por encima del mar de nubes
-    if (pk.position.z > 75) { pk.position.z = -170 - rand(0, 40); pk.position.x = rand(-75, 75); pk.rotation.y = rand(0, Math.PI * 2); }
-  });
+
 }
 
 /* --- cámara: cenital en suelo, cinemática en la transformación,
@@ -13879,6 +13985,22 @@ body.spy-mode #heat, body.spy-mode .run-goal { display:none !important; }
 body.spy-cine #hud, body.spy-cine #touch { opacity:0; pointer-events:none; transition:opacity .3s; }
 body.spy-air #hud .speedo, body.spy-air #drive-coach, body.spy-air .combo { display:none !important; }
 @media (pointer:coarse) { .spy-key { display:none; } }
+/* ---- cinemática de transformación ---- */
+#spy-tfx { position:fixed; inset:0; pointer-events:none; z-index:41; opacity:0; transition:opacity .3s; overflow:hidden; }
+#spy-tfx.on { opacity:1; }
+#spy-tfx .tb { position:absolute; left:0; right:0; height:9vh; background:#000; transition:transform .5s cubic-bezier(.2,.8,.2,1); }
+#spy-tfx .tb.t { top:0; transform:translateY(-100%); }
+#spy-tfx .tb.b { bottom:0; transform:translateY(100%); }
+#spy-tfx.on .tb { transform:none; }
+.tfx-title { position:absolute; top:calc(9vh + 18px); left:50%; transform:translateX(-50%) skewX(-12deg); font-size:clamp(28px, 7vw, 56px); font-weight:900; font-style:italic; letter-spacing:.18em; color:#fff; white-space:nowrap; text-shadow:0 0 18px #ff2bd6, 0 0 36px rgba(0,240,255,.6), 0 3px 0 rgba(5,4,15,.8); }
+#spy-tfx.on .tfx-title { animation:tfxIn .6s cubic-bezier(.2,1.4,.4,1) both; }
+.tfx-step { position:absolute; left:calc(24px + env(safe-area-inset-left)); bottom:calc(9vh + 18px); font-size:clamp(14px, 3.6vw, 22px); font-weight:900; letter-spacing:.16em; color:#00f0ff; text-shadow:0 0 12px rgba(0,240,255,.8), 0 2px 0 rgba(5,4,15,.9); }
+.tfx-step em { font-style:normal; color:#ff2bd6; margin-right:10px; }
+.tfx-step b { color:#fff; }
+.tfx-step.go { animation:tfxStep .45s cubic-bezier(.2,1.3,.4,1) both; }
+.tfx-skip { position:absolute; right:calc(20px + env(safe-area-inset-right)); bottom:calc(9vh + 22px); font-size:11px; font-weight:800; letter-spacing:.2em; color:rgba(255,255,255,.6); }
+@keyframes tfxIn { from { opacity:0; transform:translateX(-50%) skewX(-12deg) scale(1.6); } to { opacity:1; transform:translateX(-50%) skewX(-12deg) scale(1); } }
+@keyframes tfxStep { from { opacity:0; transform:translateX(-30px); } to { opacity:1; transform:none; } }
 /* ---- HUD de la fase aérea ---- */
 #spyair { position:absolute; inset:0; pointer-events:none; display:none; z-index:11; }
 body.spy-air #spyair { display:block; }
