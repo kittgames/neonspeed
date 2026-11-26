@@ -829,7 +829,7 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
 <!-- SPY HUNTER -->
 <div id="spypre" class="screen dim">
   <div class="panel sheet spypre-sheet">
-    <div class="rp-hero"><small>AGENCY BRIEFING</small><b>SPY HUNTER</b><small>6 ROAD SECTIONS · AIR BATTLE</small></div>
+    <div class="rp-hero"><small>AGENCY BRIEFING</small><b>SPY HUNTER</b><small>5 ROAD SECTIONS · AIR BATTLE</small></div>
     <ul class="rp-rules">
       <li><em>🚐</em><span>Drive into <b>WEAPON VANS</b> from behind, through the ramp. Weapons <b>stack</b>: gun, rear bombs, missiles. Switch with <b>1 2 3 / R</b>.</span></li>
       <li><em>🛢️</em><span><b>OIL</b> (Z) spins out whatever is behind you; <b>SMOKE</b> (C) blinds it. Side-ram with <b>Q / E</b> or a double tap.</span></li>
@@ -1129,15 +1129,15 @@ body.race-mode #pitfx.on{display:flex;flex-direction:column;align-items:center;g
     // file:// or no streaming support: plain script tag, bar creeps until the game reports in
     setPct(10, 'LOADING THE CITY…');
     var p = 10, iv = setInterval(function () { p += (84 - p) * 0.04; setPct(p); if (!boot.isConnected || p > 83) clearInterval(iv); }, 120);
-    var s = document.createElement('script'); s.src = 'game.js?v=03ba725ebc'; s.onerror = fail; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'game.js?v=31c0c27186'; s.onerror = fail; document.body.appendChild(s);
   }
   function fail() {
     nextStatus = null; $('ld-status').textContent = 'COULD NOT LOAD';
     var e = document.createElement('div'); e.className = 'ld-err'; e.textContent = 'Check your connection and reload the page.'; boot.appendChild(e);
   }
   if (location.protocol === 'file:' || !window.fetch || !window.ReadableStream || !window.TextDecoder) { fallback(); return; }
-  var TOTAL = 10753587;
-  fetch('game.js?v=03ba725ebc').then(function (r) {
+  var TOTAL = 10755372;
+  fetch('game.js?v=31c0c27186').then(function (r) {
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     var reader = r.body.getReader(), dec = new TextDecoder(), parts = [], got = 0;
     function pump() {

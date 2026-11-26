@@ -11989,16 +11989,16 @@ const GS = {
   UP_COST: [400, 900, 1600],
 };
 /* tramos: [desde, hasta) en metros de la partida */
+const G_RIVER = false;                         // desvío en lancha: desactivado de momento (el código sigue aquí)
 const G_SECTIONS = [
-  { id: 'highway', name: 'HIGHWAY',        sub: 'shake off the first hunters',   from: 0,    to: 1500, par: 30 },
-  { id: 'city',    name: 'DOWNTOWN',       sub: 'gunmen ahead · mind the civilians',      from: 1500, to: 3100, par: 32 },
-  { id: 'bridge',  name: 'BAY BRIDGE',     sub: 'mine layers · switchblades', from: 3100, to: 4500, par: 28 },
-  { id: 'river',   name: 'RIVER DETOUR',   sub: 'speedboats · floating mines',   from: 4500, to: 5700, par: 24 },
-  { id: 'tunnel',  name: 'BLACK TUNNEL',   sub: 'headlights only · armored',     from: 5700, to: 6900, par: 24 },
-  { id: 'final',   name: 'FINAL STRAIGHT', sub: 'helicopter · the big rig',      from: 6900, to: 1e9,  par: 60 },
+  { id: 'highway', name: 'HIGHWAY',        sub: 'shake off the first hunters',        from: 0,    to: 1500, par: 30 },
+  { id: 'city',    name: 'DOWNTOWN',       sub: 'gunmen ahead · mind the civilians',  from: 1500, to: 3100, par: 32 },
+  { id: 'bridge',  name: 'BAY BRIDGE',     sub: 'mine layers · switchblades',         from: 3100, to: 4500, par: 28 },
+  { id: 'tunnel',  name: 'BLACK TUNNEL',   sub: 'headlights only · armored',          from: 4500, to: 5700, par: 24 },
+  { id: 'final',   name: 'FINAL STRAIGHT', sub: 'helicopter · the big rig',           from: 5700, to: 1e9,  par: 60 },
 ];
 const G_PIECE_AT = [700, 2300, 3800];          // la 4.ª pieza (alas) la lleva el camión mini-jefe
-const G_FORK_AT = 2850, G_RAMP_IN = 4500, G_RAMP_OUT = 5700, G_BOSS_AT = 7400;
+const G_FORK_AT = 2850, G_RAMP_IN = 4500, G_RAMP_OUT = 5700, G_BOSS_AT = 6250;
 const G_WEAPON = {
   1: { name: 'MACHINE GUN', use: 'light cars, gunmen and mines', icon: 0, col: '#ffd23f' },
   2: { name: 'BOMBS',       use: 'drop behind you · hunters on your tail', icon: 1, col: '#ff6b2b' },
@@ -12033,11 +12033,12 @@ function gReset() {
   G.owned = [false, false, false, false]; G.cur = 0; G.ammo = { 2: 0, 3: 0 }; G.gunHold = 0;
   G.oil = GS.OIL_MAX; G.smoke = GS.SMOKE_MAX; G.oilT = G.smokeT = 0;
   G.shuntV = 0; G.shuntCd = 0; G.shuntT = 0; G.wind = 0; G.windT = 0;
-  G.chain = 0; G.chainT = 0; G.incidents = 0; G.policeAt = 3;
+  G.chain = 0; G.chainT = 0; G.incidents = 0; G.policeAt = 4;
   G.sec = -1; G.secT = 0; G.stats = []; G.calm = 0; G.route = 'normal';
   if (G.boat) gBoatExit(true);
   G.dock = null; G.chase = null; G.boss = null; G.boat = null; G.jump = null; G.tut = null;
   G.spawnT = 2; G.crossT = 6; G.dmgSec = 0; G.recoil = 0; G.camBias = 0;
+  G.waveI = {}; G.waveOn = false; G.waveT = 0; G.waveLeft = false; G.rest = 2;
   G.seen = null; G.rampIn = null; G.boatDone = false; G.bossDone = false; G.chaseDone = false; G.vanBackT = 0; G.reported = null;
   G.armorHint = G.civHint = false; G.gust = null; G.dark = 0; G.cycleT = null; G.wind = 0; G.camH = 0;
   if (G.darkEl) G.darkEl.style.opacity = 0;
@@ -12481,7 +12482,7 @@ function gIncident(why) {
   flash('#ffd23f');
   gBanner('CIVILIAN DESTROYED', '-100' + (lost ? ' · chain lost' : '') + (G.policeAt - G.incidents > 0 ? ' · ' + (G.policeAt - G.incidents) + ' more and the agency police comes' : ' · the agency police is after you'), '#ffd23f', 1.6);
   if (G.incidents >= G.policeAt && !G.foes.some(f => f.type === 'agency' && !f.dead)) {
-    G.policeAt += 3;
+    G.policeAt += 4;
     gFoeAdd('agency', { x: clamp(player.x + 4, -6, 6), z: 40, speed: player.speed + 18, life: 10 });
     if (AudioSys.ready) AudioSys.sfx('beep');
   }
@@ -13156,7 +13157,7 @@ function gChaseStart(p) {
   G.chase = { p, t: 15 };
   p.z = -45;
   gBanner('IT IS ESCAPING!', 'catch the missile van in 15 s · use NITRO', '#ff2bd6', 2.5);
-  gSpawnRammer(true); setTimeout(() => { if (G.chase) gSpawnRammer(false); }, 1200);
+  gSpawnRammer(true);
 }
 function gChaseTick(dt) {
   const C = G.chase; if (!C) return;
@@ -13331,36 +13332,74 @@ function gJumpTick(dt) {
 /* =====================================================================
    DIRECTOR: tramos, apariciones, respiros, viento, oscuridad, tutorial y medallas
    ===================================================================== */
-const G_TABLE = {
-  highway: [['rammer', 1]],
-  city:    [['rammer', 0.8], ['gunner', 1.2], ['blade', 0.9]],
-  bridge:  [['miner', 1.2], ['blade', 0.8], ['rammer', 0.6], ['gunner', 0.5]],
-  river:   [],
-  tunnel:  [['armor', 1.3], ['blade', 0.8], ['rammer', 0.6]],
-  final:   [['heli', 1], ['gunner', 0.7], ['rammer', 0.7]],
+/* Curva de dificultad: oleadas con guion. Cada tramo presenta su enemigo nuevo solo, luego lo
+   combina con uno conocido. La siguiente oleada no llega hasta limpiar la actual y pasar un
+   respiro; si una oleada se alarga, los enemigos se retiran. Nunca hay más de dos a la vez
+   (tres en la ruta peligrosa). */
+const G_WAVES = {
+  highway: [['rammer'], ['rammer'], ['rammer', 'rammer']],
+  city:    [['gunner'], ['rammer'], ['gunner', 'rammer'], ['blade']],
+  bridge:  [['miner'], ['blade'], ['miner', 'rammer'], ['blade', 'gunner']],
+  tunnel:  [['armor'], ['rammer', 'blade'], ['armor', 'gunner']],
+  final:   [['heli']],
 };
+const G_WAVE = { REST: 3.5, REST_SAFE: 5.5, REST_DANGER: 2.5, MAX_T: 16, STAGGER: 1400 };
 function gAlive() { return spy.enemies.length + G.foes.filter(f => !f.dead && f.type !== 'agency').length; }
-function gDirector(dt) {
-  const S = gSec(), d = run.dist;
-  // tutorial: los primeros metros, un único enemigo lento
-  if (G.tut && d < 320) { gTutTick(dt); return; }
-  if (G.tut) gTutTick(dt);
-  if (G.calm > 0 || G.dock || G.jump || G.boat || (G.boss && !G.boss.dead)) return;
-  G.spawnT -= dt;
-  // hasta tener la primera arma, un solo perseguidor a la vez
-  const maxAlive = (!G.cur ? 1 : S.id === 'highway' ? 2 : 3) + (G.route === 'danger' ? 1 : 0);
-  if (G.spawnT > 0 || gAlive() >= maxAlive) return;
-  G.spawnT = grand(3.6, 6) * (G.route === 'danger' ? 0.65 : G.route === 'safe' ? 1.3 : 1);
-  const table = G_TABLE[S.id].filter(([t]) => !(t === 'blade' && S.id === 'city' && d < 2200) && !(t === 'heli' && G.foes.some(f => f.type === 'heli' && !f.dead)));
-  if (!table.length) return;
-  let tot = table.reduce((a, b) => a + b[1], 0), r = gr() * tot, type = table[0][0];
-  for (const [t, w] of table) { r -= w; if (r <= 0) { type = t; break; } }
+function gSpawnFoe(type) {
+  if (spy.phase !== 'ground' || G.boat || G.jump || (G.boss && !G.boss.dead)) return;
   if (type === 'rammer') gSpawnRammer(gr() < 0.6);
   else if (type === 'blade') gFoeAdd('blade', { x: clamp(player.x + (gr() < 0.5 ? -5 : 5), -7, 7), z: 34, speed: player.speed + 14 });
   else if (type === 'armor') gFoeAdd('armor', { x: LANES[Math.floor(gr() * 4)], z: -120, speed: player.speed - 8 });
   else if (type === 'gunner') gFoeAdd('gunner', { x: LANES[Math.floor(gr() * 4)], z: -110, speed: player.speed - 12 });
   else if (type === 'miner') gFoeAdd('miner', { x: LANES[Math.floor(gr() * 4)], z: -130, speed: player.speed - 14 });
-  else if (type === 'heli') gFoeAdd('heli', { x: 0, z: -120, life: 30 });
+  else if (type === 'heli') gFoeAdd('heli', { x: 0, z: -120, life: 22 });
+}
+/* los enemigos de una oleada que se alarga se retiran por delante */
+function gLeaveTick(dt) {
+  for (let i = spy.enemies.length - 1; i >= 0; i--) {
+    const e = spy.enemies[i]; if (!e.leave) continue;
+    e.state = 'retreat'; e.t = 0; e.z -= 30 * dt;
+    if (e.z < -80) { scene.remove(e.model.root); spy.enemies.splice(i, 1); }
+  }
+  for (const f of G.foes) if (f.leave && !f.dead) {
+    if (f.type === 'heli') f.life = Math.min(f.life == null ? 2.5 : f.life, 2.5);
+    else { f.z -= 34 * dt; if (f.z < -90) gFoeRemove(f); }
+  }
+}
+function gDirector(dt) {
+  const S = gSec(), d = run.dist;
+  // tutorial: los primeros metros, un único enemigo lento
+  if (G.tut && d < 320) { gTutTick(dt); return; }
+  if (G.tut) gTutTick(dt);
+  gLeaveTick(dt);
+  if (G.dock || G.jump || G.boat || (G.boss && !G.boss.dead)) return;
+  if (gAlive() > 0) {
+    G.waveT += dt;
+    if (G.waveT > G_WAVE.MAX_T && !G.waveLeft) {
+      G.waveLeft = true;
+      spy.enemies.forEach(e => { e.leave = true; });
+      G.foes.forEach(f => { if (f.type !== 'agency') f.leave = true; });
+    }
+    return;
+  }
+  // con la policía de la agencia encima no llega una oleada nueva
+  if (G.foes.some(f => !f.dead && f.type === 'agency')) return;
+  // oleada limpia: respiro antes de la siguiente
+  if (G.waveOn) { G.waveOn = false; G.rest = G.route === 'safe' ? G_WAVE.REST_SAFE : G.route === 'danger' ? G_WAVE.REST_DANGER : G_WAVE.REST; }
+  if (G.calm > 0 || G.chase) return;
+  G.rest -= dt;
+  if (G.rest > 0) return;
+  const list = G_WAVES[S.id] || [];
+  if (!list.length) return;
+  let i = G.waveI[S.id] || 0;
+  if (i >= list.length) i = Math.min(1, list.length - 1);     // si el tramo se alarga, repite sin la presentación
+  G.waveI[S.id] = i + 1;
+  let wave = list[i].slice();
+  if (!G.cur) wave = wave.slice(0, 1);                        // sin arma todavía: de uno en uno
+  if (G.route === 'danger') wave.push('rammer');
+  if (S.id === 'final' && d > G_BOSS_AT - 250) return;        // calma antes del camión
+  wave.forEach((type, k) => { if (k === 0) gSpawnFoe(type); else spyLater(() => gSpawnFoe(type), k * G_WAVE.STAGGER); });
+  G.waveOn = true; G.waveT = 0; G.waveLeft = false;
 }
 function gSectionStart(i) {
   const S = G_SECTIONS[i];
@@ -13631,14 +13670,14 @@ function gTick(dt) {
   if (G.recoil > 0.3) shake = Math.max(shake, 0.05 * G.recoil);
   // ruta elegida en la bifurcación
   if (G.route === 'normal' && fork.side && fork.active) { G.route = fork.side === fork.busy ? 'danger' : 'safe'; }
-  if (G.route !== 'normal' && (gSec().id === 'river' || gSec().id === 'tunnel' && G.routeEnd)) G.route = 'normal';
+  if (G.route !== 'normal' && (gSec().id === 'tunnel' || gSec().id === 'final')) G.route = 'normal';
   // piezas
   if (spy.nextPiece < 3 && d > G_PIECE_AT[spy.nextPiece] && !spy.pieceCars.some(p => p.pieceIndex === spy.nextPiece) && !G.boat && !G.jump && !(G.chase && G.chase.p)) {
     if (!(G.vanBackT > 0)) gSpawnVan(spy.nextPiece);
   }
   // rampa al río
-  if (!G.rampIn && d >= G_RAMP_IN - 230 && d < G_RAMP_IN) { G.rampIn = gRampMesh(-(G_RAMP_IN - d), true); gBanner('RIVER DETOUR AHEAD', 'hit the ramp at full speed', '#00f0ff', 2); }
-  if (!G.boat && !G.boatDone && d >= G_RAMP_IN) { G.boatDone = true; gBoatEnter(); }
+  if (G_RIVER && !G.rampIn && d >= G_RAMP_IN - 230 && d < G_RAMP_IN) { G.rampIn = gRampMesh(-(G_RAMP_IN - d), true); gBanner('RIVER DETOUR AHEAD', 'hit the ramp at full speed', '#00f0ff', 2); }
+  if (G_RIVER && !G.boat && !G.boatDone && d >= G_RAMP_IN) { G.boatDone = true; gBoatEnter(); }
   // camión mini-jefe
   if (!G.bossDone && d >= G_BOSS_AT && !G.boat && spy.pieces >= 3) { G.bossDone = true; gBossStart(); }
   if (!G.bossDone && d >= G_BOSS_AT + 900 && spy.pieces < 3) { /* sin la 3.ª pieza el camión espera: se repite la furgoneta */ }
@@ -16006,7 +16045,7 @@ crash = function (v, dir) {
 const _spDifficulty = difficulty;
 difficulty = function () { const d = _spDifficulty(); return spy.mode ? Math.min(d, 0.22) : d; };
 const _spSpawnPattern = spawnPattern;
-spawnPattern = function () { if (spy.mode && (spy.phase !== 'ground' || G.boat || G.jump)) return; _spSpawnPattern(); };
+spawnPattern = function () { if (spy.mode && (spy.phase !== 'ground' || G.boat || G.jump || Math.random() < 0.3)) return; _spSpawnPattern(); };
 
 function spyCleanup() {
   spy.mode = false;
