@@ -13925,6 +13925,10 @@ function buildCarPlane() {
   const c = _spCarDef();
   const m = buildCar({ color: c.color, accent: c.accent, player: true, style: c.style });
   m.root.traverse(o => { if (o.isMesh && o.material === MAT.blob) o.visible = false; });   // sin sombra de asfalto
+  if (c.style === 'phantom') {                            // visto desde arriba la laca negra refleja el cielo y se ve gris
+    const src = phantomPaint(c.color), air = phantomAirPaint(c.color);
+    m.root.traverse(o => { if (o.isMesh && o.material === src) o.material = air; });
+  }
   const R = _tfBuildRig(m, c.color);
   const L = m.halfL || 2.2;
   R.wings.forEach(w => { w.hinge.rotation.z = 0; w.wg.scale.set(w.sd, 1, 1); });
@@ -16854,6 +16858,190 @@ body.spy-air .tbtn.spy-fire.on { background:rgba(125,249,255,.35); box-shadow:0 
 
 window.NSSpy = { spy, actions, camera, race, run: () => run, get state() { return state; }, get playerModel() { return playerModel; },
   beginTransform: spyBeginTransform, air: A, audio: AudioSys, g: G, player, input, traffic, gApi: { gFoeAdd, gSwitch, gOil, gSmoke, gShunt, gSpawnVan, gBossStart, fork: () => fork }, airBomb: () => airBomb(), ebFire: (b, x, z, a, sp) => ebFire(b, x, z, a, sp), equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
+
+/* =====================================================================
+   DLC · coche "PHANTOM 82"
+   GT de cuña de los 80 (diseño propio): negro brillante, morro bajo en
+   cuña, capó largo, cabina retrasada con trasera fastback, faros de ranura
+   y barra de escáner roja que barre de lado a lado en el morro.
+   Interfaz igual que buildCarProc: { root, body, wheels, headM, tailM,
+   tailMesh, halfW, halfL, lights }.
+   ===================================================================== */
+
+const PHANTOM = {
+  L: 2.55, H: 0.74, wz: 1.52, arch: 0.42, w: 1.9,
+  // cabina: arranca tarde (capó largo) y cae en fastback hasta la cola
+  gh: [[-0.55, 0], [0.05, 0.37], [0.72, 0.39], [2.05, 0.05]], gw: 1.46,
+  SCAN_W: 1.3,   // ancho útil de la ranura del escáner
+};
+
+function phantomBodyPath(sh) {
+  const { L, H, wz, arch } = PHANTOM;
+  // bajos y pasos de rueda
+  sh.moveTo(-L + 0.1, 0.3);
+  sh.lineTo(-wz - arch - 0.02, 0.28); sh.lineTo(-wz - arch, 0.34);
+  sh.absarc(-wz, 0.36, arch, Math.PI, 0, true);
+  sh.lineTo(-wz + arch + 0.02, 0.28); sh.lineTo(wz - arch - 0.02, 0.28); sh.lineTo(wz - arch, 0.34);
+  sh.absarc(wz, 0.36, arch, Math.PI, 0, true);
+  sh.lineTo(wz + arch + 0.02, 0.28); sh.lineTo(L - 0.06, 0.32);
+  // cola recta y alta (corte tipo kammback)
+  sh.lineTo(L + 0.02, 0.5); sh.lineTo(L, H + 0.04);
+  sh.lineTo(L - 0.25, H + 0.07);            // pequeño labio de alerón
+  sh.lineTo(0.6, H + 0.02);                  // línea de cintura
+  sh.lineTo(-0.6, H);                        // base del parabrisas
+  // capó largo que cae en cuña hasta un morro muy bajo
+  sh.quadraticCurveTo(-1.8, H - 0.06, -L + 0.12, 0.6);
+  sh.lineTo(-L - 0.04, 0.5);
+  sh.quadraticCurveTo(-L - 0.08, 0.36, -L + 0.1, 0.3);
+}
+function phantomGreenhouse(sh) {
+  const g = PHANTOM.gh, H = PHANTOM.H;
+  sh.moveTo(g[0][0], H); g.forEach(p => sh.lineTo(p[0], H + p[1])); sh.lineTo(g[0][0], H);
+}
+function phantomRoof(sh) {
+  const a = PHANTOM.gh[1], b = PHANTOM.gh[2], H = PHANTOM.H;
+  sh.moveTo(a[0] - 0.02, H + a[1] - 0.03); sh.lineTo(b[0] + 0.03, H + b[1] - 0.03);
+  sh.lineTo(b[0] - 0.02, H + b[1] + 0.035); sh.lineTo(a[0] + 0.04, H + a[1] + 0.035);
+}
+
+const PHANTOM_GEO = {
+  paint: () => [
+    [profile(phantomBodyPath, PHANTOM.w, 0.07, 10), 0, 0, 0],
+    [profile(phantomRoof, PHANTOM.gw + 0.02, 0.03), 0, 0, 0],
+    // retrovisores
+    [GEO.box, PHANTOM.w / 2 + 0.05, PHANTOM.H + 0.08, -0.45, 0, 0, 0, 0.14, 0.09, 0.2],
+    [GEO.box, -PHANTOM.w / 2 - 0.05, PHANTOM.H + 0.08, -0.45, 0, 0, 0, 0.14, 0.09, 0.2],
+    // alerón trasero bajo
+    [GEO.box, 0, PHANTOM.H + 0.14, PHANTOM.L - 0.22, -0.06, 0, 0, PHANTOM.w - 0.2, 0.05, 0.34],
+    [GEO.box, -0.62, PHANTOM.H + 0.08, PHANTOM.L - 0.24, 0, 0, 0, 0.06, 0.1, 0.12],
+    [GEO.box, 0.62, PHANTOM.H + 0.08, PHANTOM.L - 0.24, 0, 0, 0, 0.06, 0.1, 0.12],
+    // tomas del capó
+    [GEO.box, -0.42, PHANTOM.H - 0.035, -1.25, -0.04, 0, 0, 0.32, 0.03, 0.7],
+    [GEO.box, 0.42, PHANTOM.H - 0.035, -1.25, -0.04, 0, 0, 0.32, 0.03, 0.7],
+  ],
+  // detalles en el color de acento: fino perfil en el lateral y labio del morro
+  accent: () => [
+    [GEO.box, PHANTOM.w / 2 + 0.006, 0.47, 0.05, 0, 0, 0, 0.03, 0.035, 2 * PHANTOM.L - 1.5],
+    [GEO.box, -PHANTOM.w / 2 - 0.006, 0.47, 0.05, 0, 0, 0, 0.03, 0.035, 2 * PHANTOM.L - 1.5],
+    [GEO.box, 0, 0.31, -PHANTOM.L - 0.02, 0, 0, 0, PHANTOM.w - 0.35, 0.03, 0.12],
+  ],
+  glass: () => [[profile(phantomGreenhouse, PHANTOM.gw, 0.04), 0, 0, 0]],
+  louver: () => {
+    const g = PHANTOM.gh, H = PHANTOM.H, a = g[2], b = g[3];
+    const ang = Math.atan2(a[1] - b[1], b[0] - a[0]), out = [];
+    for (let i = 0; i < 7; i++) {
+      const t = 0.12 + i * 0.12, z = a[0] + (b[0] - a[0]) * t, y = H + a[1] + (b[1] - a[1]) * t + 0.035;
+      out.push([GEO.box, 0, y, z, ang, 0, 0, PHANTOM.gw - 0.12, 0.025, 0.07]);
+    }
+    return out;
+  },
+  trim: () => [
+    // ranura negra del escáner en el morro
+    [GEO.box, 0, 0.47, -PHANTOM.L - 0.135, 0, 0, 0, PHANTOM.SCAN_W + 0.16, 0.14, 0.05],
+    // parachoques y difusor
+    [GEO.box, 0, 0.36, PHANTOM.L + 0.08, 0, 0, 0, PHANTOM.w - 0.2, 0.1, 0.08],
+    [GEO.box, 0, 0.27, PHANTOM.L - 0.1, 0, 0, 0, PHANTOM.w - 0.5, 0.06, 0.3],
+    [GEO.cyl, -0.5, 0.3, PHANTOM.L + 0.12, Math.PI / 2, 0, 0, 0.09, 0.12, 0.09],
+    [GEO.cyl, -0.32, 0.3, PHANTOM.L + 0.12, Math.PI / 2, 0, 0, 0.09, 0.12, 0.09],
+    // interior (asientos y salpicadero)
+    [GEO.box, -0.34, PHANTOM.H + 0.13, 0.42, 0, 0, 0, 0.44, 0.46, 0.42],
+    [GEO.box, 0.34, PHANTOM.H + 0.13, 0.42, 0, 0, 0, 0.44, 0.46, 0.42],
+    [GEO.box, 0, PHANTOM.H + 0.1, -0.35, 0, 0, 0, 1.2, 0.3, 0.32],
+    // rejillas laterales detrás de las puertas
+    [GEO.box, PHANTOM.w / 2 + 0.004, 0.6, 1.0, 0, 0, 0, 0.02, 0.12, 0.42],
+    [GEO.box, -PHANTOM.w / 2 - 0.004, 0.6, 1.0, 0, 0, 0, 0.02, 0.12, 0.42],
+  ],
+  plate: () => [[GEO.box, 0, 0.47, PHANTOM.L + 0.105, 0, 0, 0, 0.5, 0.11, 0.02]],
+  // faros de ranura muy finos a ambos lados del escáner
+  head: () => [
+    [GEO.box, -0.78, 0.57, -PHANTOM.L - 0.1, -0.35, 0.15, 0, 0.3, 0.05, 0.06],
+    [GEO.box, 0.78, 0.57, -PHANTOM.L - 0.1, -0.35, -0.15, 0, 0.3, 0.05, 0.06],
+  ],
+  // pilotos: barra roja a todo lo ancho de la cola
+  tail: () => [
+    [GEO.box, 0, PHANTOM.H - 0.12, PHANTOM.L + 0.1, 0, 0, 0, PHANTOM.w - 0.3, 0.09, 0.05],
+    [GEO.box, -0.7, PHANTOM.H - 0.24, PHANTOM.L + 0.1, 0, 0, 0, 0.32, 0.06, 0.05],
+    [GEO.box, 0.7, PHANTOM.H - 0.24, PHANTOM.L + 0.1, 0, 0, 0, 0.32, 0.06, 0.05],
+  ],
+};
+
+/* --- barra de escáner animada: un punto rojo que barre con estela --- */
+const SCANNER_SEGS = 7;
+function phantomScanner(color) {
+  const grp = new THREE.Group();
+  grp.position.set(0, 0.47, -PHANTOM.L - 0.172);
+  const c = new THREE.Color(color);
+  const segs = [];
+  for (let i = 0; i < SCANNER_SEGS; i++) {
+    const m = basic({ color: i === 0 ? new THREE.Color(1, 0.12, 0.08) : c.clone(), transparent: true, opacity: 1, depthWrite: false });
+    const s = new THREE.Mesh(GEO.box, m);
+    s.scale.set(0.22, 0.09, 0.03); s.renderOrder = 5;
+    grp.add(s); segs.push(s);
+  }
+  // se anima en cada render: no depende del bucle del juego (vale para menú, garaje y partida)
+  const hist = [];
+  segs[0].onBeforeRender = () => {
+    const t = performance.now() / 1000;
+    const x = Math.sin(t * Math.PI * 1.1) * (PHANTOM.SCAN_W / 2 - 0.08);
+    if (!hist.length || hist[0] !== x) { hist.unshift(x); if (hist.length > 40) hist.pop(); }
+    for (let i = 0; i < SCANNER_SEGS; i++) {
+      const hx = hist[Math.min(hist.length - 1, i * 3)];
+      segs[i].position.x = hx;
+      segs[i].material.opacity = i === 0 ? 1 : Math.pow(1 - i / SCANNER_SEGS, 1.6) * 0.9;
+    }
+  };
+  return grp;
+}
+
+const _phantomPaints = new Map();
+function phantomPaint(hex) {
+  if (!_phantomPaints.has(hex)) _phantomPaints.set(hex, envMat(track(bent(new THREE.MeshPhysicalMaterial({
+    color: col(hex), metalness: 0.5, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.12, envMapIntensity: 0.28 })))));
+  return _phantomPaints.get(hex);
+}
+const _phantomAirPaints = new Map();
+function phantomAirPaint(hex) {   // versión mate para el avión de Spy Hunter
+  if (!_phantomAirPaints.has(hex)) _phantomAirPaints.set(hex, envMat(track(bent(new THREE.MeshPhysicalMaterial({
+    color: col(hex), metalness: 0, roughness: 0.9, clearcoat: 0, envMapIntensity: 0.04 })))));
+  return _phantomAirPaints.get(hex);
+}
+function buildPhantom(o) {
+  const root = new THREE.Group(), body = new THREE.Group(); root.add(body);
+  // negro piano: brillo de laca pero sin reflejar tanto el cielo (si no, se ve azul)
+  const pm = o.override || phantomPaint(o.color != null ? o.color : 0x0d0d11);
+  const am = o.override || paint(o.accent != null ? o.accent : 0xff1a1a, false);
+  const headM = o.override || (o.player ? basic({ color: new THREE.Color(1, 0.96, 0.85) }) : MAT.head);
+  const tailM = o.override || (o.player ? basic({ color: new THREE.Color(0.75, 0.02, 0.05) }) : MAT.tail);
+  const k = 'phantom' + (o.player ? 'P' : '');
+  const mats = { paint: pm, accent: am, glass: o.override || MAT.glass, louver: o.override || MAT.trim, trim: o.override || MAT.trim, plate: o.override || MAT.plate, head: headM, tail: tailM };
+  const meshes = {};
+  if (o.override) {
+    body.add(new THREE.Mesh(merged(k + 'ghost', () => [].concat(...Object.values(PHANTOM_GEO).map(f => f()))), o.override));
+  } else {
+    Object.keys(PHANTOM_GEO).forEach(role => {
+      const me = new THREE.Mesh(merged(k + role, PHANTOM_GEO[role]), mats[role]);
+      me.castShadow = role === 'paint';
+      body.add(me); meshes[role] = me;
+    });
+    body.add(phantomScanner(o.scanner != null ? o.scanner : 0xff0000));
+  }
+  const W = PHANTOM.w, wy = 0.36, wx = W / 2 - 0.05;
+  const wheels = [wheel(-wx, wy, -PHANTOM.wz, true, 1, o.override), wheel(wx, wy, -PHANTOM.wz, true, 1, o.override),
+    wheel(-wx, wy, PHANTOM.wz, false, 1.04, o.override), wheel(wx, wy, PHANTOM.wz, false, 1.04, o.override)];
+  wheels.forEach(w => root.add(w.steer));
+  if (!o.override) blob(root, W + 0.9, 2 * PHANTOM.L + 1.2);
+  return { root, body, wheels, headM, tailM, tailMesh: meshes.tail, halfW: W / 2 - 0.03, halfL: PHANTOM.L,
+    lights: { tailZ: PHANTOM.L + 0.16, tailX: 0.6, tailY: PHANTOM.H - 0.12, single: false } };
+}
+
+// enrutar el estilo 'phantom' al constructor propio
+const _dlcBuildCar = buildCar;
+buildCar = function (o) { return o && o.style === 'phantom' ? buildPhantom(o) : _dlcBuildCar(o); };
+
+// en el garaje (DLC): desbloqueado de serie y el segundo de la lista
+CARS.splice(1, 0, { id: 'phantom82', name: 'Phantom 82', hex: '#0d0d11', color: 0x0d0d11, accent: 0xff1a1a, price: 0, style: 'phantom', dlc: true,
+  st: { speed: 3, handling: 3, nitro: 4 } });
+if (typeof save !== 'undefined' && save.owned && !save.owned.includes('phantom82')) save.owned.push('phantom82');
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
