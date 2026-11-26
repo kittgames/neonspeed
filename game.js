@@ -10042,12 +10042,12 @@ const SPY_ENABLED = true;
 const SPY = {
   /* energía */
   HP_MAX: 100,
-  DMG_ENEMY:    20,   // embestida de enemigo
+  DMG_ENEMY:    14,   // embestida de enemigo (×1,3 si venía cargando)
   DMG_TRAFFIC:  15,   // choque con tráfico inocente
   DMG_KILL:     30,   // eliminar inocente
   HEAL_PIECE:   20,   // recoger pieza
-  REGEN_DELAY:  4,    // s sin daño para regenerar
-  REGEN_RATE:   6,    // hp/s
+  REGEN_DELAY:  3,    // s sin daño para regenerar
+  REGEN_RATE:   8,    // hp/s
 
   /* enemigos de embestida */
   ENEMY_INTERVAL: 5,  // s base (era 6)
@@ -10057,7 +10057,7 @@ const SPY = {
   ENEMY_CHARGE_DIST: 25,  // distancia Z para activar carga
   ENEMY_CHARGE_SPEED: 80, // velocidad durante carga
   ENEMY_CHARGE_STEER: 22, // steering lateral durante carga
-  ENEMY_WARN_TIME: 0.8,   // s de aviso antes de cargar
+  ENEMY_WARN_TIME: 1.0,   // s de aviso antes de cargar
   ENEMY_COLOR: 0x1a1a1a,
   ENEMY_ACCENT: 0xff2020,
 
@@ -11990,7 +11990,7 @@ const GS = {
 /* tramos: [desde, hasta) en metros de la partida */
 const G_SECTIONS = [
   { id: 'highway', name: 'HIGHWAY',        sub: 'shake off the first hunters',   from: 0,    to: 1500, par: 30 },
-  { id: 'city',    name: 'DOWNTOWN',       sub: 'crossings · gunmen ahead',      from: 1500, to: 3100, par: 32 },
+  { id: 'city',    name: 'DOWNTOWN',       sub: 'gunmen ahead · mind the civilians',      from: 1500, to: 3100, par: 32 },
   { id: 'bridge',  name: 'BAY BRIDGE',     sub: 'crosswind · mines on the road', from: 3100, to: 4500, par: 28 },
   { id: 'river',   name: 'RIVER DETOUR',   sub: 'speedboats · floating mines',   from: 4500, to: 5700, par: 24 },
   { id: 'tunnel',  name: 'BLACK TUNNEL',   sub: 'headlights only · armored',     from: 5700, to: 6900, par: 24 },
@@ -12407,7 +12407,7 @@ const G_FOE = {
   gunner: { hp: 4, score: 250, name: 'GUNMAN', tip: 'it fires back along the red line · change lane, hit it while it reloads' },
   miner:  { hp: 4, score: 250, name: 'MINE LAYER', tip: 'shoot the mines or steer around them' },
   heli:   { hp: 6, score: 800, name: 'MAD BOMBER', tip: 'only MISSILES reach it · steer out of the shadows' },
-  agency: { hp: 6, score: 0, name: 'AGENCY POLICE', tip: 'you hit too many civilians · outrun them, do not shoot' },
+  agency: { hp: 6, score: 0, name: 'AGENCY POLICE', tip: 'you destroyed civilians · shake them off with oil, smoke or a side-ram' },
   boat:   { hp: 2, score: 200, name: 'SPEEDBOAT', tip: 'they ram from the side · shoot or side-ram them' },
 };
 function gFoeAdd(type, o) {
@@ -12433,7 +12433,11 @@ function gFoeHit(f, dmg, kind, x, z) {
     return true;
   }
   if (f.type === 'heli' && kind !== 'missile') return false;   // las balas pasan por debajo
-  if (f.type === 'agency') { gIncident('police'); }
+  if (f.type === 'agency') {                                   // blindada: no se la puede destruir ni penaliza
+    if (kind === 'ram') return true;
+    burst(x, 1.4, z, 2, { colors: [[0.7, 0.8, 1], [1, 1, 1]], speed: 7, up: 3, life: 0.2, size: 0.3, spread: 0.2, grav: 10 });
+    return true;
+  }
   f.hp -= dmg; f.flash = 1;
   gfxFlash(x, 1.4, z, 1.6, 0xfff1c0, 0.07);
   if (f.hp <= 0) gFoeKill(f, kind);
@@ -12461,16 +12465,21 @@ function gKill(base, x, z, label) {
 }
 /* civiles: cortan la cadena, restan puntos y, si se repite, llega la policía de la agencia */
 function gIncident(why) {
+  if (why === 'crash') {
+    if (G.chain > 1) gBanner('CHAIN LOST', 'you hit a civilian', '#ffd23f', 1);
+    G.chain = 0; G.chainT = 0;
+    return;
+  }
   G.incidents++;
   if (G.stats[G.sec]) G.stats[G.sec].inc++;
   const lost = G.chain > 1;
   G.chain = 0; G.chainT = 0;
   spy.score = Math.max(0, spy.score - 100);
   flash('#ffd23f');
-  gBanner(why === 'police' ? 'DO NOT SHOOT THE POLICE' : 'CIVILIAN HIT', '-100' + (lost ? ' · chain lost' : '') + (G.policeAt - G.incidents > 0 ? ' · ' + (G.policeAt - G.incidents) + ' more and the agency police comes' : ' · the agency police is after you'), '#ffd23f', 1.6);
+  gBanner('CIVILIAN DESTROYED', '-100' + (lost ? ' · chain lost' : '') + (G.policeAt - G.incidents > 0 ? ' · ' + (G.policeAt - G.incidents) + ' more and the agency police comes' : ' · the agency police is after you'), '#ffd23f', 1.6);
   if (G.incidents >= G.policeAt && !G.foes.some(f => f.type === 'agency' && !f.dead)) {
     G.policeAt += 3;
-    gFoeAdd('agency', { x: clamp(player.x + 4, -6, 6), z: 40, speed: player.speed + 18, life: 20 });
+    gFoeAdd('agency', { x: clamp(player.x + 4, -6, 6), z: 40, speed: player.speed + 18, life: 10 });
     if (AudioSys.ready) AudioSys.sfx('beep');
   }
 }
@@ -12583,8 +12592,9 @@ function gFoeContact(f) {
     shake = Math.max(shake, 0.5); AudioSys.sfx('crash'); gRumble(140, 0.7, 0.4);
     return;
   }
-  const dmg = { blade: 10, armor: 18, gunner: 12, miner: 12, agency: 20, boat: 16 }[f.type] || 12;
+  const dmg = { blade: 10, armor: 16, gunner: 10, miner: 10, agency: 10, boat: 12 }[f.type] || 10;
   spyDamage(dmg, f.x, f.z);
+  if (f.type === 'agency') { f.hitCd = 3.2; f.state = 'in'; f.st = 0; f.side = -(f.side || 1); }   // la policía te empuja y se retira un momento
   if (f.type === 'armor' && f.z < 0) { player.speed *= 0.6; }   // le has dado por detrás: frenazo
   player.x = clamp(player.x + Math.sign(player.x - f.x || 1) * 1.6, -X_LIMIT, X_LIMIT);
   f.x -= Math.sign(player.x - f.x || 1) * 1;
@@ -12696,7 +12706,7 @@ function gChaserTick(f, dt) {
     const want = ps + clamp(f.z * 1.5, -20, 20);
     f.speed += clamp(want - f.speed, -18 * dt, 16 * dt);
     f.vx = clamp((tx - f.x) * 3, -10, 10); f.x += f.vx * dt;
-    if (Math.abs(f.z) < 2.5 && Math.abs(f.x - tx) < 1) { if (f.state !== 'warn') { f.state = 'warn'; f.st = 0; } }
+    if (f.hitCd <= 0 && Math.abs(f.z) < 2.5 && Math.abs(f.x - tx) < 1) { if (f.state !== 'warn') { f.state = 'warn'; f.st = 0; } }
     if (f.state === 'warn' && f.st > 0.7) { f.state = 'ram'; f.st = 0; f.vx = -side * 24; }
   } else {
     f.x += f.vx * dt;
@@ -12818,11 +12828,11 @@ function gProjTick(dt) {
       }
     }
     if (!used && G.boss && !G.boss.dead) used = gBossBullet(b);
-    if (!used) for (const v of traffic) {
+    if (!used && !b.homing) for (const v of traffic) {       // los misiles vuelan por encima de los civiles
       if (v.knock) continue;
       if (Math.abs(b.x - v.x) < 1.2 && Math.abs(b.z - v.z) < (v.model.halfL || 2.2)) {
         // un civil aguanta tres balas (los misiles lo destruyen): solo destruirlo es un incidente
-        v.ghp = (v.ghp == null ? 5 : v.ghp) - (b.homing ? 99 : b.dmg);
+        v.ghp = (v.ghp == null ? 8 : v.ghp) - b.dmg;
         burst(b.x, 1.2, b.z, 3, { colors: [[1, 0.9, 0.5], [1, 1, 1]], speed: 6, up: 3, life: 0.2, size: 0.3, spread: 0.2, grav: 10 });
         if (v.ghp <= 0) { knockVehicle(v, Math.sign(v.x - player.x) || 1); gIncident('shot'); }
         else if (!G.civHint) { G.civHint = true; gBanner('CIVILIAN IN THE LINE OF FIRE', 'stop shooting or it gets destroyed', '#ffd23f', 1.6); }
@@ -12918,7 +12928,7 @@ function gBossTick(dt) {
   m.steel.emissiveIntensity = B.flash * 0.4;
   let zr = -9;                     // z de la trasera del remolque
   if (B.state === 'enter') { if (B.z > -24) { B.state = 'cruise'; B.st = 0; } }
-  else if (B.state === 'cruise') { if (B.st > 3) { B.state = gr() < 0.55 ? 'doors' : 'block'; B.st = 0; } }
+  else if (B.state === 'cruise') { if (B.st > 2.4) { B.state = gr() < 0.68 ? 'doors' : 'block'; B.st = 0; } }
   else if (B.state === 'doors') {
     zr = -8;
     if (B.st > 0.6 && !B.released) {
@@ -12966,7 +12976,7 @@ function gBossBullet(b) {
     return true;
   }
   const doorsOpen = B.doors > 0.6 && dz > 9;
-  if (missile || doorsOpen) { gBossHit(missile ? 4 : 1, missile ? 'missile' : 'gun', b.x, b.z); if (missile) gfxBoom(b.x, b.z, 1); return true; }
+  if (missile || doorsOpen) { gBossHit(missile ? 6 : 1, missile ? 'missile' : 'gun', b.x, b.z); if (missile) gfxBoom(b.x, b.z, 1); return true; }
   burst(b.x, 2, b.z, 3, { colors: [[1, 1, 0.8], [0.8, 0.85, 1]], speed: 8, up: 4, life: 0.25, size: 0.3, spread: 0.2, grav: 10 });
   return true;
 }
@@ -13034,17 +13044,19 @@ function gVanTick(p, dt) {
   const ps = player.speed;
   if (G.dock && G.dock.p === p) return;
   const C = G.chase && G.chase.p === p ? G.chase : null;
+  const aligned = p.z < 0 && Math.abs(player.x - p.x) < 1.8;
   if (C) {
-    // huye: más rápida que tu velocidad normal, más lenta que con nitro
-    const vs = P.maxSpeed * 1.06;
+    // huye: algo más rápida que tu velocidad de crucero, más lenta que con nitro
+    const vs = P.maxSpeed * (1 + 0.16 * difficulty()) * 1.05;
     p.z += (ps - vs) * dt;
     if (p.z > -2.4) p.z = -2.4;            // no te adelanta por detrás: al alcanzarla puedes entrar
   } else {
-    p.z += clamp((-13 - p.z) * 1.4, -30, 30) * dt;
+    // espera 13 m por delante; cuando te pones detrás, en su carril, frena y se deja alcanzar
+    const zT = aligned ? -4.5 : -13;
+    p.z += clamp((zT - p.z) * (aligned ? 2.4 : 1.4), -30, aligned ? 16 : 30) * dt;
   }
-  const L = p.lane == null ? p.x : LANES[p.lane];
-  p.laneT = (p.laneT || grand(4, 7)) - dt;
-  if (p.laneT <= 0 && !C) { p.laneT = grand(5, 8); if (Math.abs(player.x - p.x) > 3) p.lane = clamp((p.lane == null ? 1 : p.lane) + (gr() < 0.5 ? -1 : 1), 0, 3); }
+  p.laneT = (p.laneT || grand(6, 9)) - dt;
+  if (p.laneT <= 0 && !C) { p.laneT = grand(6, 9); if (Math.abs(player.x - p.x) > 4.5) p.lane = clamp((p.lane == null ? 1 : p.lane) + (gr() < 0.5 ? -1 : 1), 0, 3); }
   if (p.lane != null) p.x += clamp(LANES[p.lane] - p.x, -4 * dt, 4 * dt);
   // rampa: se abre cuando estás detrás y alineado
   const behind = p.z < 0 && p.z > -26 && Math.abs(player.x - p.x) < 1.8;
@@ -13298,7 +13310,8 @@ function gDirector(dt) {
   if (G.tut) gTutTick(dt);
   if (G.calm > 0 || G.dock || G.jump || G.boat || (G.boss && !G.boss.dead)) return;
   G.spawnT -= dt;
-  const maxAlive = (S.id === 'highway' ? 2 : 3) + (G.route === 'danger' ? 1 : 0);
+  // hasta tener la primera arma, un solo perseguidor a la vez
+  const maxAlive = (!G.cur ? 1 : S.id === 'highway' ? 2 : 3) + (G.route === 'danger' ? 1 : 0);
   if (G.spawnT > 0 || gAlive() >= maxAlive) return;
   G.spawnT = grand(3.6, 6) * (G.route === 'danger' ? 0.65 : G.route === 'safe' ? 1.3 : 1);
   const table = G_TABLE[S.id].filter(([t]) => !(t === 'blade' && S.id === 'city' && d < 2200) && !(t === 'heli' && G.foes.some(f => f.type === 'heli' && !f.dead)));
@@ -13600,8 +13613,6 @@ function gTick(dt) {
   if (spy.nextPiece < 3 && d > G_PIECE_AT[spy.nextPiece] && !spy.pieceCars.some(p => p.pieceIndex === spy.nextPiece) && !G.boat && !G.jump && !(G.chase && G.chase.p)) {
     if (!(G.vanBackT > 0)) gSpawnVan(spy.nextPiece);
   }
-  // cruces en el centro
-  if (gSec().id === 'city' && !G.boat && (G.crossT -= dt) <= 0) { G.crossT = grand(5, 8); gCrossing(); }
   // rampa al río
   if (!G.rampIn && d >= G_RAMP_IN - 230 && d < G_RAMP_IN) { G.rampIn = gRampMesh(-(G_RAMP_IN - d), true); gBanner('RIVER DETOUR AHEAD', 'hit the ramp at full speed', '#00f0ff', 2); }
   if (!G.boat && !G.boatDone && d >= G_RAMP_IN) { G.boatDone = true; gBoatEnter(); }
@@ -15864,7 +15875,7 @@ function spyCamera(dt) {
   } else {
     const x = player.x * 0.5, cb = spy.phase === 'ground' ? gCamBias(dt) : { z: 0, h: 0, y: 0 };
     const port = camera.aspect < 0.8 ? 1 : 0;
-    _spCamPos.set(x, 30 + cb.h + cb.y * 0.6 + port * 3, 10 + cb.z + port * 5); _spCamLook.set(x, cb.y * 0.5, -5 + cb.z * 0.8 + port * 7);
+    _spCamPos.set(x, 36 + cb.h + cb.y * 0.6 + port * 3, 12 + cb.z + port * 5); _spCamLook.set(x, cb.y * 0.5, -8 + cb.z * 0.8 + port * 7);
     c.fov = 62;
   }
   if (c.snap || state === 'countdown' || !spy.camInit) {
@@ -15965,6 +15976,8 @@ crash = function (v, dir) {
   _spCrash(v, dir);
 };
 
+const _spDifficulty = difficulty;
+difficulty = function () { const d = _spDifficulty(); return spy.mode ? Math.min(d, 0.22) : d; };
 const _spSpawnPattern = spawnPattern;
 spawnPattern = function () { if (spy.mode && (spy.phase !== 'ground' || G.boat || G.jump)) return; _spSpawnPattern(); };
 
@@ -16350,7 +16363,7 @@ body.spy-air .tbtn.spy-fire.on { background:rgba(125,249,255,.35); box-shadow:0 
 })();
 
 window.NSSpy = { spy, actions, camera, race, run: () => run, get state() { return state; }, get playerModel() { return playerModel; },
-  beginTransform: spyBeginTransform, air: A, audio: AudioSys, g: G, player, gApi: { gFoeAdd, gSwitch, gOil, gSmoke, gShunt, gSpawnVan, gBossStart, fork: () => fork }, airBomb: () => airBomb(), ebFire: (b, x, z, a, sp) => ebFire(b, x, z, a, sp), equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
+  beginTransform: spyBeginTransform, air: A, audio: AudioSys, g: G, player, input, traffic, gApi: { gFoeAdd, gSwitch, gOil, gSmoke, gShunt, gSpawnVan, gBossStart, fork: () => fork }, airBomb: () => airBomb(), ebFire: (b, x, z, a, sp) => ebFire(b, x, z, a, sp), equip: spyEquip, goMenu: () => goMenu(), toBoss: () => transitionToBoss(), damage: v => spyDamage(v), scene };
 
 /* =====================================================================
    v13: RANKING GLOBAL, RETO DIARIO Y FANTASMAS (Supabase)
@@ -16944,6 +16957,8 @@ sun.shadow.normalBias = 0.02;
   let kick = 0, wasNitro = false;
   updateCamera = dt => {
     _uc(dt);
+    // en Spy la cámara es cenital: el desenfoque radial y la aberración cromática parecen un fallo gráfico
+    if (spy.mode && spy.phase !== 'off') { Post.u.radial.value = 0; Post.u.aberr.value = 0; return; }
     const sf = clamp(player.speed / P.maxSpeed, 0, 1.6), playing = state === 'playing';
     const nitro = playing && player.nitroOn ? 1 : 0, calm = save.settings.reducedMotion;
     if (nitro && !wasNitro) kick = 1; // golpe al encender el nitro
