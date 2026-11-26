@@ -15508,6 +15508,152 @@ function airBossTick(dt) {
   }
 }
 
+/* =====================================================================
+   ATMÓSFERA DE LA FASE AÉREA
+   Estado de luz y clima compartido por nubes, niebla, luces de la escena y partículas:
+   día (primeras oleadas) → atardecer → tormenta con relámpagos y lluvia (jefe) → vuelve el sol
+   al ganar. Las partículas de ambiente (motas de hielo, jirones y lluvia) son un único Points:
+   se siembran una vez y el shader las recicla en un volumen acotado ligado al scroll.
+   ===================================================================== */
+A.atmo = { cur: 'day', next: null, k: 0, flash: 0, boltT: 5, v: { cyc: 0.3, fill: 0.25, wisp: [1, 1, 1], fog: [0.75, 0.86, 0.96], sun: [1, 0.97, 0.88], sunI: 1, rain: 0, mote: [0.42, 0.55, 0.75] } };
+function airAtmoReset() {
+  const M = A.atmo, P = AIR_SKY.day;
+  M.cur = 'day'; M.next = null; M.k = 0; M.flash = 0; M.boltT = 5;
+  M.v = { cyc: P.cyc, fill: P.fill, wisp: P.wisp.slice(), fog: P.fog.slice(), sun: P.sun.slice(), sunI: P.sunI, rain: 0, mote: P.mote.slice() };
+  if (A.amb) { A.amb.travel = 0; A.amb.rainTravel = 0; }
+}
+function airAtmoTick(dt) {
+  const M = A.atmo;
+  // qué cielo toca: atardecer a partir de la tercera oleada, tormenta con el jefe, sol al ganar
+  let want = 'day';
+  if (spy.phase === 'boss' && A.boss && !A.boss.dying) want = 'storm';
+  else if (spy.phase === 'air' && A.waveIdx >= 2) want = 'sunset';
+  else if (spy.phase === 'dead') want = M.next || M.cur;
+  if (!M.next && want !== M.cur) { M.next = want; M.k = 0; }
+  if (M.next) {
+    M.k += dt / (M.next === 'storm' ? 5 : 8);
+    if (M.k >= 1) { M.cur = M.next; M.next = null; M.k = 0; }
+  }
+  const a = AIR_SKY[M.cur], b = AIR_SKY[M.next || M.cur], k = M.next ? M.k * M.k * (3 - 2 * M.k) : 0, v = M.v;
+  const mix3 = (out, x, y) => { out[0] = x[0] + (y[0] - x[0]) * k; out[1] = x[1] + (y[1] - x[1]) * k; out[2] = x[2] + (y[2] - x[2]) * k; };
+  mix3(v.wisp, a.wisp, b.wisp); mix3(v.fog, a.fog, b.fog); mix3(v.sun, a.sun, b.sun); mix3(v.mote, a.mote, b.mote);
+  v.cyc = a.cyc + (b.cyc - a.cyc) * k; v.fill = a.fill + (b.fill - a.fill) * k; v.sunI = a.sunI + (b.sunI - a.sunI) * k; v.rain = a.rain + (b.rain - a.rain) * k;
+  // relámpagos en la tormenta: iluminan nubes y partículas a la vez
+  M.flash = Math.max(0, M.flash - dt * 4.5);
+  if (v.rain > 0.6 && !save.settings.reducedMotion) {
+    M.boltT -= dt;
+    if (M.boltT <= 0) {
+      M.boltT = rand(2.8, 6); M.flash = 1;
+      setTimeout(() => { if (spy.inAir && M.flash < 0.6 && Math.random() < 0.6) M.flash = 0.7; }, 130);
+      if (AudioSys.ready) setTimeout(() => { if (spy.inAir) AudioSys.tone(70, 0.9, { type: 'sawtooth', vol: 0.05, to: 28 }); }, 350);
+    }
+  }
+}
+/* aplica el estado a nubes, niebla y partículas (se llama cada fotograma desde spyAirTick) */
+function airAtmoApply() {
+  const T = _spAir, M = A.atmo, v = M.v;
+  if (!T) return;
+  const f = 1 + M.flash * 0.85;
+  T.floor.material.map = T.seaTex[M.cur];
+  T.floor.material.color.setRGB(f, f, f);
+  if (M.next) { T.floorB.visible = true; T.floorB.material.map = T.seaTex[M.next]; T.floorB.material.opacity = M.k * M.k * (3 - 2 * M.k); T.floorB.material.color.setRGB(f, f, f); }
+  else T.floorB.visible = false;
+  T.mid.material.color.setRGB(v.wisp[0] * f, v.wisp[1] * f, v.wisp[2] * f);
+  T.puffs.forEach(q => q.material.color.setRGB(v.wisp[0] * f, v.wisp[1] * f, v.wisp[2] * f));
+  scene.fog.color.setRGB(v.fog[0], v.fog[1], v.fog[2]);
+  T.fill.intensity = v.fill + M.flash * 1.5;
+  const U = A.amb && A.amb.u;
+  if (U) { U.uSun.value.set(v.sun[0], v.sun[1], v.sun[2]); U.uSunI.value = v.sunI; U.uMote.value.set(v.mote[0], v.mote[1], v.mote[2]); U.uWisp.value.set(v.wisp[0], v.wisp[1], v.wisp[2]); U.uRain.value = v.rain; U.uFlash.value = M.flash; }
+}
+/* partículas de ambiente: semilla fija (x de campo, altitud, estación, azar); todo lo demás en el shader */
+function airAmbientBuild() {
+  const N = (IS_TOUCH || Quality.level === 'low') ? 425 : 920;
+  const seed = new Float32Array(N * 4), pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    seed[i * 4] = Math.random();
+    // la mayoría entre las nubes y el avión; pocas por encima (no deben tapar el juego)
+    seed[i * 4 + 1] = Math.random() < 0.82 ? Math.random() * 0.62 : 0.62 + Math.random() * 0.38;
+    seed[i * 4 + 2] = Math.random(); seed[i * 4 + 3] = Math.random();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+  const u = {
+    uTravel: { value: 0 }, uRainTravel: { value: 0 }, uTime: { value: 0 }, uSpeed: { value: AIR.SCROLL }, uScale: pointScale,
+    uL: { value: 120 }, uZ0: { value: -80 }, uHalfW: { value: 50 }, uFloor: { value: AIR_FLOOR }, uY0: { value: AIR_FLOOR + 3 }, uY1: { value: SPY.AIR_Y + 16 },
+    uSun: { value: new THREE.Vector3(1, 0.97, 0.88) }, uSunI: { value: 1 }, uMote: { value: new THREE.Vector3(0.42, 0.55, 0.75) }, uWisp: { value: new THREE.Vector3(1, 1, 1) },
+    uRain: { value: 0 }, uFlash: { value: 0 },
+  };
+  const mat = new THREE.ShaderMaterial({
+    uniforms: u, transparent: true, depthTest: true, depthWrite: false,
+    vertexShader: `
+      attribute vec4 aSeed;
+      uniform float uTravel, uRainTravel, uTime, uSpeed, uScale, uL, uZ0, uHalfW, uFloor, uY0, uY1, uSunI, uRain, uFlash;
+      uniform vec3 uSun, uMote, uWisp;
+      varying vec4 vCol; varying float vAsp; varying float vStreak;
+      float hash(float n) { return fract(sin(n) * 43758.5453); }
+      void main() {
+        float w = aSeed.w;
+        float kind = step(0.94, w);                       // 6 % jirones de nube; el resto, motas
+        float y = mix(uY0, uY1, aSeed.y);
+        float par = 1.0 + (y - uFloor) / 16.0;            // más alto = más cerca de la cámara = más rápido
+        // avance por el volumen ligado al scroll; módulo positivo
+        float zz = aSeed.z * uL + uTravel * par + uRainTravel * (0.6 + 0.8 * hash(w * 31.0)) + 2.0 + sin(uTime * 0.7 + w * 40.0) * 1.5;
+        float wrapN = floor(zz / uL);
+        float fz = zz - wrapN * uL;
+        // el desplazamiento lateral cambia en el borde oculto
+        float x = (hash(aSeed.x * 91.7 + wrapN * 12.9898 + w * 78.233) * 2.0 - 1.0) * uHalfW + sin(uTime * 0.5 + w * 20.0) * 2.0;
+        vec4 mv = viewMatrix * vec4(x, y, uZ0 + fz, 1.0);
+        float depth = max(1.0, -mv.z);
+        // se funden en los dos extremos del reciclado y muy cerca de la cámara
+        float fade = clamp(min(fz, uL - fz) / (uL * 0.1), 0.0, 1.0) * smoothstep(16.0, 30.0, depth);
+        float above = smoothstep(0.62, 0.75, aSeed.y);    // por encima del avión: más tenues
+        float rainy = uRain * (1.0 - kind);
+        float size = mix(0.3 + 0.55 * hash(w * 7.3), 5.0 + 7.0 * hash(w * 3.1), kind);
+        // estela: se alarga con la velocidad real de la partícula; la lluvia, mucho más
+        float len = size + max(0.0, uSpeed - 14.0) * par * mix(0.016, 0.004, kind) + rainy * (2.5 + 3.0 * hash(w * 5.0));
+        float wid = size * mix(1.0, 0.55, rainy);
+        vAsp = clamp(wid / len, 0.04, 1.0);
+        vStreak = 1.0 - vAsp;
+        // color: jirones con el tinte de las nubes; motas claras u oscuras; destello con el color del sol
+        float dark = step(0.62, hash(w * 13.0)) * (1.0 - kind);
+        float glint = pow(max(0.0, sin(uTime * (2.0 + 3.0 * hash(w * 17.0)) + w * 60.0)), 12.0) * (1.0 - kind) * (1.0 - dark);
+        vec3 moteLight = mix(vec3(0.92, 0.96, 1.0), uSun, 0.35);
+        vec3 col = mix(mix(moteLight, uMote, dark), uWisp, kind);
+        col = mix(col, vec3(0.72, 0.8, 0.95), rainy * 0.8);
+        col += uSun * glint * uSunI * 0.9 + vec3(0.9, 0.95, 1.0) * uFlash * 0.8;
+        float alpha = mix(mix(0.7, 0.38, dark), 0.2, kind);
+        alpha = mix(alpha, 0.5, rainy) * mix(1.0, 0.45, above) + glint * 0.25;
+        vCol = vec4(col, alpha * fade);
+        gl_PointSize = min(len * uScale / depth, 220.0);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying vec4 vCol; varying float vAsp; varying float vStreak;
+      void main() {
+        vec2 q = gl_PointCoord - 0.5;
+        q.x /= vAsp;
+        float d = length(q) * 2.0;
+        if (d > 1.0) discard;
+        float a = pow(1.0 - d, 1.4);
+        a *= mix(1.0, mix(0.3, 1.0, gl_PointCoord.y), vStreak);   // la cabeza (abajo) más brillante que la cola
+        gl_FragColor = vec4(vCol.rgb, vCol.a * a);
+      }`,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false; pts.renderOrder = 5;     // por encima de nubes y sombras, por debajo de disparos y balas
+  A.amb = { pts, u, travel: 0, rainTravel: 0, n: N };
+  A.root.add(pts);
+}
+function airAmbientTick(dt) {
+  const M = A.amb; if (!M) return;
+  const fb = A.fb, u = M.u;
+  M.travel += A.scroll * dt;
+  M.rainTravel += A.atmo.v.rain * 70 * dt;
+  u.uTravel.value = M.travel; u.uRainTravel.value = M.rainTravel; u.uTime.value = A.t; u.uSpeed.value = A.scroll;
+  u.uZ0.value = fb.zT - 40; u.uL.value = (fb.zB + 22) - (fb.zT - 40); u.uHalfW.value = fb.vis + 16;
+}
+
 /* ---------- entrada / salida de la fase aérea ---------- */
 function airEnsure() {
   if (A.root) return;
@@ -15518,6 +15664,7 @@ function airEnsure() {
   A.ebL = _airBulletPool(220, 3.5, 1.15);
   A.root.add(A.ebS.glowPts, A.ebL.glowPts, A.ebS.pts, A.ebL.pts);
   A.shots = _airShots(); A.shots.ims.forEach(im => A.root.add(im));
+  airAmbientBuild();
   _airPlayerExtras();
 }
 function airReset() {
@@ -15541,6 +15688,7 @@ function airReset() {
   A.bombs = AIR.BOMBS; A.pow = 1; A.chain = 0; A.chainT = 0; A.hitstop = 0; A.vx = A.vz = 0; A.t = 0;
   A.shotCd = A.misCd = 0; A.focus = false; A.touch = false; A.hintT = 0;
   A.camX = 0; A.roll = 0; A.scroll = AIR.SCROLL; A.fovPunch = 0;
+  airAtmoReset();
   if (A.boss && A.boss.mats) A.boss.mats.forEach(m => { m.emissive.setHex(m.userData.e0.c); m.emissiveIntensity = m.userData.e0.i; });
   A.boss = null;
   airTouch.id = null;
@@ -15598,6 +15746,8 @@ function spyAirFrame(dt) {
   _airBoomsTick(dt); _airBombTick(dt);
   airHudTick();
   airScrollTick(dt);
+  airAtmoTick(dt);
+  airAmbientTick(dt);
 }
 /* scroll dinámico: velocidad según el momento, cámara que sigue al avión y se inclina al girar */
 function airScrollTick(dt) {
@@ -15797,8 +15947,19 @@ function _spNoise(S, seed) {
   return D;
 }
 /* mar de nubes visto desde arriba: relieve iluminado desde arriba a la izquierda y huecos con el océano */
-function _spSeaTex(wisp) {
-  const S = 512, D = _spNoise(S, wisp ? 31 : 7);
+/* paletas del cielo de la fase aérea: S = nube en sombra, T = nube iluminada, L = luz rasante
+   (desde arriba a la izquierda), A/B = mar entre las nubes */
+const AIR_SKY = {
+  day:    { S: [0.66, 0.74, 0.86], T: [1, 1, 1],          L: [0.12, 0.11, 0.07], A: [0.05, 0.08, 0.16], B: [0.04, 0.2, 0.38],
+            cyc: 0.3,   fill: 0.25, wisp: [1, 1, 1],          fog: [0.75, 0.86, 0.96], sun: [1, 0.97, 0.88],  sunI: 1,    rain: 0, mote: [0.42, 0.55, 0.75] },
+  sunset: { S: [0.5, 0.36, 0.52],  T: [1, 0.78, 0.6],     L: [0.3, 0.18, 0.02],  A: [0.1, 0.05, 0.12],  B: [0.14, 0.08, 0.16],
+            cyc: 0.515, fill: 1.3,  wisp: [1, 0.8, 0.68],     fog: [0.9, 0.68, 0.54],  sun: [1, 0.6, 0.28],   sunI: 1.25, rain: 0, mote: [0.42, 0.3, 0.5] },
+  storm:  { S: [0.27, 0.3, 0.38],  T: [0.62, 0.66, 0.72], L: [0.07, 0.07, 0.08], A: [0.03, 0.05, 0.08], B: [0.03, 0.06, 0.1],
+            cyc: 0.49,  fill: 0.9,  wisp: [0.5, 0.55, 0.64],  fog: [0.36, 0.4, 0.48],  sun: [0.8, 0.88, 1],   sunI: 0.3,  rain: 1, mote: [0.22, 0.26, 0.34] },
+};
+function _spSeaTex(wisp, D, P) {
+  const S = 512;
+  D = D || _spNoise(S, wisp ? 31 : 7); P = P || AIR_SKY.day;
   const c = document.createElement('canvas'); c.width = c.height = S;
   const g = c.getContext('2d'), img = g.createImageData(S, S), px = img.data;
   const at = (x, y) => D[((y + S) % S) * S + ((x + S) % S)];
@@ -15806,7 +15967,7 @@ function _spSeaTex(wisp) {
     const d = D[y * S + x], i = (y * S + x) * 4;
     const lit = clamp((at(x - 3, y - 3) - at(x + 3, y + 3)) * 10, -1, 1);
     const dens = smooth(0.45, 0.82, d);
-    let r = 0.66 + 0.34 * dens + 0.12 * lit, gg = 0.74 + 0.26 * dens + 0.11 * lit, b = 0.86 + 0.14 * dens + 0.07 * lit;
+    const r = P.S[0] + (P.T[0] - P.S[0]) * dens + P.L[0] * lit, gg = P.S[1] + (P.T[1] - P.S[1]) * dens + P.L[1] * lit, b = P.S[2] + (P.T[2] - P.S[2]) * dens + P.L[2] * lit;
     if (wisp) {
       px[i] = clamp(r + 0.08, 0, 1) * 255; px[i + 1] = clamp(gg + 0.07, 0, 1) * 255; px[i + 2] = clamp(b + 0.04, 0, 1) * 255;
       px[i + 3] = smooth(0.53, 0.75, d) * 200;
@@ -15814,7 +15975,7 @@ function _spSeaTex(wisp) {
     }
     const cov = smooth(0.4, 0.56, d);
     const sea = 0.55 + 0.45 * smooth(0.22, 0.4, d);
-    const sr = 0.05 + 0.04 * sea, sg = 0.2 * sea + 0.08, sb = 0.38 * sea + 0.16;
+    const sr = P.A[0] + P.B[0] * sea, sg = P.A[1] + P.B[1] * sea, sb = P.A[2] + P.B[2] * sea;
     px[i] = clamp(sr + (r - sr) * cov, 0, 1) * 255;
     px[i + 1] = clamp(sg + (gg - sg) * cov, 0, 1) * 255;
     px[i + 2] = clamp(sb + (b - sb) * cov, 0, 1) * 255;
@@ -15849,10 +16010,16 @@ function _spBuildAir() {
   grp.userData.spyAir = true;
   const FLOOR_Y = AIR_FLOOR, SIZE = 700;
   // mar de nubes opaco (tapa por completo el mundo de abajo)
-  const t1 = _spSeaTex(false), tile1 = 100; t1.repeat.set(SIZE / tile1, SIZE / tile1);
+  // el mismo relieve de nubes pintado con tres luces (día, atardecer, tormenta); se funden entre sí
+  const tile1 = 100, D1 = _spNoise(512, 7), seaTex = {};
+  for (const k in AIR_SKY) { seaTex[k] = _spSeaTex(false, D1, AIR_SKY[k]); seaTex[k].repeat.set(SIZE / tile1, SIZE / tile1); }
+  const t1 = seaTex.day;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE), new THREE.MeshBasicMaterial({ map: t1, fog: false, toneMapped: false }));
   floor.rotation.x = -Math.PI / 2; floor.position.set(0, FLOOR_Y, -150);
   grp.add(floor);
+  const floorB = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE), new THREE.MeshBasicMaterial({ map: t1, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false }));
+  floorB.rotation.x = -Math.PI / 2; floorB.position.set(0, FLOOR_Y + 0.05, -150); floorB.visible = false;
+  grp.add(floorB);
   // jirones más altos y más rápidos → paralaje
   const t2 = _spSeaTex(true), tile2 = 150; t2.repeat.set(SIZE / tile2, SIZE / tile2);
   const mid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE),
@@ -15876,9 +16043,10 @@ function _spBuildAir() {
     q.renderOrder = high ? 10 : 2;
     grp.add(q); puffs.push(q);
   }
-  // luz propia para que el avión se vea siempre de día
-  grp.add(new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25));
-  return { grp, t1, t2, tile1, tile2, puffs };
+  // luz de relleno propia: el avión y los enemigos se leen con cualquier cielo
+  const fill = new THREE.HemisphereLight(0xcfe8ff, 0x6f8fb0, 0.25);
+  grp.add(fill);
+  return { grp, t1, t2, tile1, tile2, puffs, seaTex, floor, floorB, mid, fill };
 }
 function _spKeep(o) {
   return o === _spAir.grp || o.isLight || o === sky || o.isPoints ||
@@ -15915,10 +16083,12 @@ function spyAirTick(dt) {
   if (!_spAir) return;
   spyAirHide();
   bendUniform.value.set(0, 0);   // la curvatura de la carretera no afecta al cielo
-  scene.fog.color.setHex(0xbfdcf5); scene.fog.near = 200; scene.fog.far = 700;
+  scene.fog.near = 200; scene.fog.far = 700;
+  airAtmoApply();
   if (state === 'paused') return;
   const T = _spAir, sp = A.scroll;
   T.t1.offset.y += sp * dt / T.tile1;
+  T.seaTex.sunset.offset.y = T.seaTex.storm.offset.y = T.t1.offset.y;
   T.t2.offset.y += sp * 1.8 * dt / T.tile2;
   T.t2.offset.x = Math.sin(simTime * 0.07) * 0.03;
   T.puffs.forEach(q => {
@@ -16020,7 +16190,7 @@ updatePlayer = function (dt) {
     // cinemática y vuelo: el coche no se controla
     player.vx = 0; player.steer = 0; player.nitroOn = false; player.brake = false;
     player.speed = Math.max(player.speed, 30);
-    if (spy.inAir) { cycle = 0.3; Weather.target = 0; }
+    if (spy.inAir) { cycle = A.atmo.v.cyc; Weather.target = 0; }
     return;
   }
   _spUpdatePlayer(dt);
